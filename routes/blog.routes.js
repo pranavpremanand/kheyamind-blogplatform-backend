@@ -23,9 +23,22 @@ router.get("/", async (req, res) => {
       ];
     }
 
+    // Filter for published blogs with publishDate in the past or equal to current date
+    // const currentDate = new Date();
+    // if (filter.status === 'published' || !filter.status) {
+    //   filter.$and = filter.$and || [];
+    //   filter.$and.push({
+    //     $or: [
+    //       // { publishDate: { $lte: currentDate } },
+    //       { publishDate: { $exists: false } } // For backward compatibility with old posts
+    //     ]
+    //   });
+    // }
+
     // Create query
     let query = Blog.find(filter)
-      .sort({ createdAt: -1 })
+      // .sort({ publishDate: -1 }) // Sort by publishDate instead of createdAt
+      .sort({ createdAt: -1 }) // Sort by publishDate instead of createdAt
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -82,15 +95,15 @@ router.get("/:id", async (req, res) => {
       .populate("author", "name");
 
     if (!blog) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Blog not found" 
+        message: "Blog not found",
       });
     }
 
     res.json({
       success: true,
-      blog
+      blog,
     });
   } catch (error) {
     console.error(error);
@@ -113,15 +126,15 @@ router.get("/slug/:slug", async (req, res) => {
       .populate("categoryId", "name");
 
     if (!blog) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Blog not found" 
+        message: "Blog not found",
       });
     }
 
     res.json({
       success: true,
-      blog
+      blog,
     });
   } catch (error) {
     console.error(error);
@@ -178,13 +191,14 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
         excerpt,
         imageAlt,
         isFeatured,
+        publishDate,
       } = req.body;
 
       // Check if image was uploaded (required)
       if (!req.file) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           success: false,
-          message: "Blog image is required" 
+          message: "Blog image is required",
         });
       }
 
@@ -228,6 +242,7 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
         excerpt: excerpt || "",
         imageAlt: imageAlt || "",
         isFeatured: isFeatured === "true" || isFeatured === true,
+        publishDate: publishDate ? new Date(publishDate) : new Date(),
       });
 
       await blog.save();
@@ -237,7 +252,7 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
 
       res.status(201).json({
         success: true,
-        blog
+        blog,
       });
     } catch (error) {
       console.error(error);
@@ -295,6 +310,7 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
         imageAlt,
         isFeatured,
         slug,
+        publishDate,
       } = req.body;
 
       console.log("Request body:", req.body);
@@ -303,9 +319,9 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
       const blog = await Blog.findById(req.params.id);
 
       if (!blog) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           success: false,
-          message: "Blog not found" 
+          message: "Blog not found",
         });
       }
 
@@ -352,7 +368,6 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
 
       // Handle isFeatured properly for both true and false values
       if (isFeatured !== undefined) {
-
         // Convert string values to boolean
         if (isFeatured === "true" || isFeatured === true) {
           blog.isFeatured = true;
@@ -363,19 +378,23 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
 
       // Update image if a new one was uploaded or URL provided
       if (req.file) {
-        
         // Convert buffer to base64 string
         const imageBase64 = `data:${
           req.file.mimetype
         };base64,${req.file.buffer.toString("base64")}`;
         blog.imageUrl = imageBase64;
       } else if (req.body.imageUrl) {
-
         // Use the provided image URL
         blog.imageUrl = req.body.imageUrl;
       }
 
       blog.status = status || blog.status;
+
+      // Update publishDate if provided
+      if (publishDate) {
+        blog.publishDate = new Date(publishDate);
+      }
+
       // updatedAt will be handled by the pre-save hook
 
       await blog.save();
@@ -385,7 +404,7 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
 
       res.json({
         success: true,
-        blog
+        blog,
       });
     } catch (error) {
       console.error(error);
@@ -406,17 +425,17 @@ router.delete("/:id", authenticate, authorizeAdmin, async (req, res) => {
     const blog = await Blog.findById(req.params.id);
 
     if (!blog) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Blog not found" 
+        message: "Blog not found",
       });
     }
 
     await blog.deleteOne();
 
-    res.json({ 
+    res.json({
       success: true,
-      message: "Blog removed" 
+      message: "Blog removed",
     });
   } catch (error) {
     console.error(error);
@@ -428,21 +447,169 @@ router.delete("/:id", authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
+// @route   GET /api/blogs/scheduled
+// @desc    Get all scheduled blogs (published blogs with future publish dates)
+// @access  Private (Admin only)
+router.get("/scheduled", authenticate, authorizeAdmin, async (req, res) => {
+  try {
+    const currentDate = new Date();
+
+    // Filter for published blogs with future publish dates
+    const filter = {
+      status: "published",
+      publishDate: { $gt: currentDate },
+    };
+
+    // Create query
+    let query = Blog.find(filter)
+      .sort({ publishDate: 1 }) // Sort by publishDate in ascending order (earliest first)
+      .populate("categoryId", "name")
+      .populate("authorId", "name")
+      .populate("author", "name");
+
+    // Apply pagination if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      const skip = (page - 1) * limit;
+      query = query.skip(skip).limit(limit);
+    }
+
+    // Execute query
+    const blogs = await query;
+
+    // Get total count
+    const totalCount = await Blog.countDocuments(filter);
+
+    // Prepare response
+    const response = {
+      success: true,
+      blogs,
+      totalCount,
+    };
+
+    // Add pagination info if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      response.currentPage = page;
+      response.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch scheduled blogs",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/blogs/published
+// @desc    Get all published blogs up to the current date
+// @access  Public
+router.get("/published", async (req, res) => {
+  try {
+    const currentDate = new Date();
+
+    // Filter for published blogs with publishDate less than or equal to current date
+    const filter = {
+      status: "published",
+      $or: [
+        { publishDate: { $lte: currentDate } },
+        { publishDate: { $exists: false } }, // For backward compatibility with old posts
+      ],
+    };
+
+    // Add search functionality
+    if (req.query.search) {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { title: { $regex: req.query.search, $options: "i" } },
+          { content: { $regex: req.query.search, $options: "i" } },
+        ],
+      });
+    }
+
+    // Create query
+    let query = Blog.find(filter)
+      .sort({ publishDate: -1 }) // Sort by publishDate in descending order (newest first)
+      .populate("categoryId", "name")
+      .populate("authorId", "name")
+      .populate("author", "name");
+
+    // Apply pagination if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      const skip = (page - 1) * limit;
+      query = query.skip(skip).limit(limit);
+    }
+
+    // Execute query
+    const blogs = await query;
+
+    // Get total count
+    const totalCount = await Blog.countDocuments(filter);
+
+    // Prepare response
+    const response = {
+      success: true,
+      blogs,
+      totalCount,
+    };
+
+    // Add pagination info if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      response.currentPage = page;
+      response.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch published blogs",
+      error: error.message,
+    });
+  }
+});
+
 // @route   GET /api/blogs/featured
 // @desc    Get featured blogs with optional pagination
 // @access  Public
 router.get("/featured", async (req, res) => {
   try {
     // Create filter for featured blogs
-    const filter = { 
+    const filter = {
       isFeatured: true,
       // Also include status filter if specified
-      ...(req.query.status ? { status: req.query.status } : { status: "published" })
+      ...(req.query.status
+        ? { status: req.query.status }
+        : { status: "published" }),
     };
+
+    // Filter for published blogs with publishDate in the past or equal to current date
+    const currentDate = new Date();
+    if (filter.status === "published") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { publishDate: { $lte: currentDate } },
+          { publishDate: { $exists: false } }, // For backward compatibility with old posts
+        ],
+      });
+    }
 
     // Create query
     let query = Blog.find(filter)
-      .sort({ createdAt: -1 })
+      .sort({ publishDate: -1 }) // Sort by publishDate instead of createdAt
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -466,7 +633,7 @@ router.get("/featured", async (req, res) => {
     const response = {
       success: true,
       blogs,
-      totalCount
+      totalCount,
     };
 
     // Add pagination info only if limit was specified

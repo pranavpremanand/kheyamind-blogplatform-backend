@@ -62,6 +62,10 @@ const blogSchema = new mongoose.Schema({
     enum: ['draft', 'published'],
     default: 'published'
   },
+  publishDate: {
+    type: Date,
+    default: Date.now
+  },
   createdAt: {
     type: Date,
     default: Date.now
