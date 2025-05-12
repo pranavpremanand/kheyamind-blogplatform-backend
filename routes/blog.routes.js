@@ -84,6 +84,214 @@ router.get("/", async (req, res) => {
   }
 });
 
+// @route   GET /api/blogs/scheduled
+// @desc    Get all scheduled blogs (published blogs with future publish dates)
+// @access  Private (Admin only)
+router.get("/scheduled", authenticate, authorizeAdmin, async (req, res) => {
+  try {
+    const currentDate = new Date();
+
+    // Filter for published blogs with future publish dates
+    const filter = {
+      status: "published",
+      publishDate: { $gt: currentDate },
+    };
+
+    // Create query
+    let query = Blog.find(filter)
+      .sort({ publishDate: 1 }) // Sort by publishDate in ascending order (earliest first)
+      .populate("categoryId", "name")
+      .populate("authorId", "name")
+      .populate("author", "name");
+
+    // Apply pagination if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      const skip = (page - 1) * limit;
+      query = query.skip(skip).limit(limit);
+    }
+
+    // Execute query
+    const blogs = await query;
+
+    // Get total count
+    const totalCount = await Blog.countDocuments(filter);
+
+    // Prepare response
+    const response = {
+      success: true,
+      blogs,
+      totalCount,
+    };
+
+    // Add pagination info if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      response.currentPage = page;
+      response.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch scheduled blogs",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/blogs/published
+// @desc    Get all published blogs up to the current date
+// @access  Public
+router.get("/published", async (req, res) => {
+  try {
+    const currentDate = new Date();
+
+    // Filter for published blogs with publishDate less than or equal to current date
+    const filter = {
+      status: "published",
+      $or: [
+        { publishDate: { $lte: currentDate } },
+        { publishDate: { $exists: false } }, // For backward compatibility with old posts
+      ],
+    };
+
+    // Add search functionality
+    if (req.query.search) {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { title: { $regex: req.query.search, $options: "i" } },
+          { content: { $regex: req.query.search, $options: "i" } },
+        ],
+      });
+    }
+
+    // Create query
+    let query = Blog.find(filter)
+      .sort({ publishDate: -1 }) // Sort by publishDate in descending order (newest first)
+      .populate("categoryId", "name")
+      .populate("authorId", "name")
+      .populate("author", "name");
+
+    // Apply pagination if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      const skip = (page - 1) * limit;
+      query = query.skip(skip).limit(limit);
+    }
+
+    // Execute query
+    const blogs = await query;
+
+    // Get total count
+    const totalCount = await Blog.countDocuments(filter);
+
+    // Prepare response
+    const response = {
+      success: true,
+      blogs,
+      totalCount,
+    };
+
+    // Add pagination info if requested
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      response.currentPage = page;
+      response.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch published blogs",
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/blogs/featured
+// @desc    Get featured blogs with optional pagination
+// @access  Public
+router.get("/featured", async (req, res) => {
+  try {
+    // Create filter for featured blogs
+    const filter = {
+      isFeatured: true,
+      // Also include status filter if specified
+      ...(req.query.status
+        ? { status: req.query.status }
+        : { status: "published" }),
+    };
+
+    // Filter for published blogs with publishDate in the past or equal to current date
+    const currentDate = new Date();
+    if (filter.status === "published") {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { publishDate: { $lte: currentDate } },
+          { publishDate: { $exists: false } }, // For backward compatibility with old posts
+        ],
+      });
+    }
+
+    // Create query
+    let query = Blog.find(filter)
+      .sort({ publishDate: -1 }) // Sort by publishDate instead of createdAt
+      .populate("categoryId", "name")
+      .populate("authorId", "name")
+      .populate("author", "name");
+
+    // Apply pagination only if limit is specified
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      const skip = (page - 1) * limit;
+
+      query = query.skip(skip).limit(limit);
+    }
+
+    // Execute query
+    const blogs = await query;
+
+    // Get total count
+    const totalCount = await Blog.countDocuments(filter);
+
+    // Prepare response
+    const response = {
+      success: true,
+      blogs,
+      totalCount,
+    };
+
+    // Add pagination info only if limit was specified
+    if (req.query.limit) {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit);
+      response.currentPage = page;
+      response.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch featured blogs",
+      error: error.message,
+    });
+  }
+});
+
 // @route   GET /api/blogs/:id
 // @desc    Get blog by ID
 // @access  Public
@@ -447,66 +655,6 @@ router.delete("/:id", authenticate, authorizeAdmin, async (req, res) => {
   }
 });
 
-// @route   GET /api/blogs/scheduled
-// @desc    Get all scheduled blogs (published blogs with future publish dates)
-// @access  Private (Admin only)
-router.get("/scheduled", authenticate, authorizeAdmin, async (req, res) => {
-  try {
-    const currentDate = new Date();
-
-    // Filter for published blogs with future publish dates
-    const filter = {
-      status: "published",
-      publishDate: { $gt: currentDate },
-    };
-
-    // Create query
-    let query = Blog.find(filter)
-      .sort({ publishDate: 1 }) // Sort by publishDate in ascending order (earliest first)
-      .populate("categoryId", "name")
-      .populate("authorId", "name")
-      .populate("author", "name");
-
-    // Apply pagination if requested
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      const skip = (page - 1) * limit;
-      query = query.skip(skip).limit(limit);
-    }
-
-    // Execute query
-    const blogs = await query;
-
-    // Get total count
-    const totalCount = await Blog.countDocuments(filter);
-
-    // Prepare response
-    const response = {
-      success: true,
-      blogs,
-      totalCount,
-    };
-
-    // Add pagination info if requested
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      response.currentPage = page;
-      response.totalPages = Math.ceil(totalCount / limit);
-    }
-
-    res.json(response);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch scheduled blogs",
-      error: error.message,
-    });
-  }
-});
-
 // @route   GET /api/blogs/published
 // @desc    Get all published blogs up to the current date
 // @access  Public
@@ -656,3 +804,4 @@ router.get("/featured", async (req, res) => {
 });
 
 module.exports = router;
+
