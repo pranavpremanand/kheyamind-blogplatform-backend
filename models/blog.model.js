@@ -18,11 +18,13 @@ const blogSchema = new mongoose.Schema({
   },
   authorId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Author'
+    ref: 'Author',
+    index: true // Add index for faster queries
   },
   categoryId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Category'
+    ref: 'Category',
+    index: true // Add index for faster queries
   },
   tags: [{
     type: String,
@@ -39,12 +41,14 @@ const blogSchema = new mongoose.Schema({
   },
   isFeatured: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true // Add index for faster featured blog queries
   },
   author: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true // Add index for faster queries
   },
   metaDescription: {
     type: String,
@@ -60,21 +64,29 @@ const blogSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['draft', 'published'],
-    default: 'published'
+    default: 'published',
+    index: true // Add index for faster status filtering
   },
   publishDate: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true // Add index for faster date-based queries
   },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true // Add index for sorting by creation date
   },
   updatedAt: {
     type: Date,
     default: Date.now
   }
 });
+
+// Create compound indexes for common query patterns
+blogSchema.index({ status: 1, publishDate: 1 }); // For published blogs with date filtering
+blogSchema.index({ status: 1, isFeatured: 1 }); // For featured published blogs
+blogSchema.index({ title: 'text', content: 'text' }); // For text search
 
 // Create slug from title before saving
 blogSchema.pre('save', async function(next) {

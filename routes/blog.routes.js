@@ -15,30 +15,24 @@ router.get("/", async (req, res) => {
     // Filter by status if specified
     const filter = req.query.status ? { status: req.query.status } : {};
 
-    // Add search functionality
+    // Add search functionality - use text index instead of regex for better performance
     if (req.query.search) {
-      filter.$or = [
-        { title: { $regex: req.query.search, $options: "i" } },
-        { content: { $regex: req.query.search, $options: "i" } },
-      ];
+      // Use text index if available, otherwise fall back to regex
+      if (req.query.search.length > 2) {
+        filter.$text = { $search: req.query.search };
+      } else {
+        filter.$or = [
+          { title: { $regex: req.query.search, $options: "i" } },
+          { content: { $regex: req.query.search, $options: "i" } },
+        ];
+      }
     }
 
-    // Filter for published blogs with publishDate in the past or equal to current date
-    // const currentDate = new Date();
-    // if (filter.status === 'published' || !filter.status) {
-    //   filter.$and = filter.$and || [];
-    //   filter.$and.push({
-    //     $or: [
-    //       // { publishDate: { $lte: currentDate } },
-    //       { publishDate: { $exists: false } } // For backward compatibility with old posts
-    //     ]
-    //   });
-    // }
-
-    // Create query
+    // Create query with lean() for better performance
     let query = Blog.find(filter)
-      // .sort({ publishDate: -1 }) // Sort by publishDate instead of createdAt
-      .sort({ createdAt: -1 }) // Sort by publishDate instead of createdAt
+      .sort({ createdAt: -1 })
+      .lean() // Use lean() to get plain JS objects instead of Mongoose documents (faster)
+      .select('-content') // Exclude large content field initially for better performance
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -50,13 +44,19 @@ router.get("/", async (req, res) => {
       const skip = (page - 1) * limit;
 
       query = query.skip(skip).limit(limit);
+    } else {
+      // If no limit specified, still limit to a reasonable number to prevent timeouts
+      query = query.limit(100);
     }
 
-    // Execute query
-    const blogs = await query;
+    // Execute query with timeout option
+    const blogs = await query.maxTimeMS(20000); // Set 20 second timeout for this query
 
-    // Get total count
-    const totalCount = await Blog.countDocuments(filter);
+    // Get total count with a separate, simpler query
+    // Use estimatedDocumentCount if no filters for better performance
+    const totalCount = Object.keys(filter).length === 0 
+      ? await Blog.estimatedDocumentCount()
+      : await Blog.countDocuments(filter).maxTimeMS(10000);
 
     // Prepare response
     const response = {
@@ -76,6 +76,16 @@ router.get("/", async (req, res) => {
     res.json(response);
   } catch (error) {
     console.error(error);
+    
+    // Provide more specific error message for timeouts
+    if (error.name === 'MongooseError' && error.message.includes('buffering timed out')) {
+      return res.status(500).json({
+        success: false,
+        message: "Query timed out. Try using pagination or narrowing your search criteria.",
+        error: error.message,
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: "Failed to fetch blogs",
