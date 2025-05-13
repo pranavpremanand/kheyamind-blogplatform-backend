@@ -19,25 +19,29 @@ const blogSchema = new mongoose.Schema({
   authorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Author',
+    required: true,
     index: true // Add index for faster queries
   },
   categoryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category',
+    required: true,
     index: true // Add index for faster queries
   },
   tags: [{
     type: String,
-    trim: true
+    trim: true,
+    required: true
   }],
   excerpt: {
     type: String,
-    trim: true
+    trim: true,
+    required: true
   },
   imageAlt: {
     type: String,
     trim: true,
-    default: ''
+    required: true
   },
   isFeatured: {
     type: Boolean,
@@ -59,7 +63,8 @@ const blogSchema = new mongoose.Schema({
     trim: true
   }],
   imageUrl: {
-    type: String
+    type: String,
+    required: true
   },
   status: {
     type: String,
@@ -106,6 +111,12 @@ blogSchema.pre('save', async function(next) {
     } else {
       this.slug = baseSlug;
     }
+  }
+  
+  // Validate that tags array is not empty
+  if (this.tags.length === 0) {
+    const err = new Error('At least one tag is required');
+    return next(err);
   }
   
   // Always update the updatedAt field if anything changed

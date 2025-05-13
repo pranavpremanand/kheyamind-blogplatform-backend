@@ -420,6 +420,86 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           message: "Blog image is required",
         });
       }
+      
+      // Validate required fields
+      if (!title) {
+        return res.status(400).json({
+          success: false,
+          message: "Title is required",
+        });
+      }
+      
+      if (!content) {
+        return res.status(400).json({
+          success: false,
+          message: "Content is required",
+        });
+      }
+      
+      if (!excerpt) {
+        return res.status(400).json({
+          success: false,
+          message: "Excerpt is required",
+        });
+      }
+      
+      if (!imageAlt) {
+        return res.status(400).json({
+          success: false,
+          message: "Image alt text is required",
+        });
+      }
+      
+      if (!categoryId) {
+        return res.status(400).json({
+          success: false,
+          message: "Category is required",
+        });
+      }
+      
+      if (!authorId) {
+        return res.status(400).json({
+          success: false,
+          message: "Author is required",
+        });
+      }
+      
+      if (!tags || (Array.isArray(tags) && tags.length === 0) || 
+          (typeof tags === 'string' && tags.trim() === '')) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one tag is required",
+        });
+      }
+      
+      // Ensure tags is properly formatted
+      let formattedTags;
+      if (Array.isArray(tags)) {
+        // Filter out any empty tags
+        formattedTags = tags.filter(tag => tag && tag.trim() !== '');
+        if (formattedTags.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: "At least one non-empty tag is required",
+          });
+        }
+      } else if (typeof tags === 'string') {
+        // Split by comma and filter out empty tags
+        formattedTags = tags.split(',')
+          .map(tag => tag.trim())
+          .filter(tag => tag !== '');
+        if (formattedTags.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: "At least one non-empty tag is required",
+          });
+        }
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Tags must be provided as a string or array",
+        });
+      }
 
       let imageUrl;
 
@@ -465,15 +545,11 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           : [],
         imageUrl,
         status: status || "published",
-        authorId: authorId || null,
-        categoryId: categoryId || null,
-        tags: tags
-          ? Array.isArray(tags)
-            ? tags
-            : tags.split(",").map((tag) => tag.trim())
-          : [],
-        excerpt: excerpt || "",
-        imageAlt: imageAlt || "",
+        authorId: authorId,
+        categoryId: categoryId,
+        tags: formattedTags,
+        excerpt: excerpt,
+        imageAlt: imageAlt,
         isFeatured: isFeatured === "true" || isFeatured === true,
         publishDate: publishDate ? new Date(publishDate) : new Date(),
         // Set custom slug if provided
@@ -587,6 +663,89 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
         }
       }
 
+      // Validate required fields
+      if (title === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Title cannot be empty",
+        });
+      }
+      
+      if (content === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Content cannot be empty",
+        });
+      }
+      
+      if (excerpt === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Excerpt cannot be empty",
+        });
+      }
+      
+      if (imageAlt === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Image alt text cannot be empty",
+        });
+      }
+      
+      if (categoryId === null || categoryId === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Category is required",
+        });
+      }
+      
+      if (authorId === null || authorId === '') {
+        return res.status(400).json({
+          success: false,
+          message: "Author is required",
+        });
+      }
+      
+      if (tags !== undefined && 
+          ((Array.isArray(tags) && tags.length === 0) || 
+           (typeof tags === 'string' && tags.trim() === ''))) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one tag is required",
+        });
+      }
+      
+      // Format tags if provided
+      let formattedTags;
+      if (tags !== undefined) {
+        if (Array.isArray(tags)) {
+          // Filter out any empty tags
+          formattedTags = tags.filter(tag => tag && tag.trim() !== '');
+          if (formattedTags.length === 0) {
+            return res.status(400).json({
+              success: false,
+              message: "At least one non-empty tag is required",
+            });
+          }
+        } else if (typeof tags === 'string') {
+          // Split by comma and filter out empty tags
+          formattedTags = tags.split(',')
+            .map(tag => tag.trim())
+            .filter(tag => tag !== '');
+          if (formattedTags.length === 0) {
+            return res.status(400).json({
+              success: false,
+              message: "At least one non-empty tag is required",
+            });
+          }
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: "Tags must be provided as a string or array",
+          });
+        }
+      }
+
       // Update blog fields
       blog.title = title || blog.title;
       blog.content = content || blog.content;
@@ -599,11 +758,7 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
         : blog.metaKeywords;
       blog.authorId = authorId !== undefined ? authorId : blog.authorId;
       blog.categoryId = categoryId !== undefined ? categoryId : blog.categoryId;
-      blog.tags = tags
-        ? Array.isArray(tags)
-          ? tags
-          : tags.split(",").map((tag) => tag.trim())
-        : blog.tags;
+      blog.tags = formattedTags !== undefined ? formattedTags : blog.tags;
       blog.excerpt = excerpt !== undefined ? excerpt : blog.excerpt;
       blog.imageAlt = imageAlt !== undefined ? imageAlt : blog.imageAlt;
 
