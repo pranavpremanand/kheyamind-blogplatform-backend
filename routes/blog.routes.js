@@ -410,6 +410,7 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
         imageAlt,
         isFeatured,
         publishDate,
+        slug,
       } = req.body;
 
       // Check if image was uploaded (required)
@@ -437,6 +438,20 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
             "Blog image is required (either upload a file or provide an imageUrl)",
         });
       }
+      // Process custom slug if provided
+      let customSlug = null;
+      if (slug) {
+        customSlug = slugify(slug);
+        // Check if the slug already exists
+        const slugExists = await Blog.findOne({ slug: customSlug });
+        if (slugExists) {
+          return res.status(400).json({
+            success: false,
+            message: "A blog with this slug already exists. Please use a different slug.",
+          });
+        }
+      }
+
       // Create blog
       const blog = new Blog({
         title,
@@ -461,6 +476,8 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
         imageAlt: imageAlt || "",
         isFeatured: isFeatured === "true" || isFeatured === true,
         publishDate: publishDate ? new Date(publishDate) : new Date(),
+        // Set custom slug if provided
+        ...(customSlug && { slug: customSlug }),
       });
 
       await blog.save();
@@ -543,25 +560,31 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
         });
       }
 
-      // Check if a custom slug was provided and it's different from the current slug
-      if (slug && slug !== blog.slug) {
-        const customSlug = slugify(slug);
-        // Check if the new slug already exists in another blog
-        const slugExists = await Blog.findOne({
-          slug: customSlug,
-          _id: { $ne: req.params.id }, // Exclude current blog
-        });
+      // Check if a custom slug was provided
+      if (slug !== undefined) {
+        // If slug is empty string, don't update it (keep the existing one)
+        if (slug !== '') {
+          const customSlug = slugify(slug);
+          // Only check for duplicates if the slug is actually changing
+          if (customSlug !== blog.slug) {
+            // Check if the new slug already exists in another blog
+            const slugExists = await Blog.findOne({
+              slug: customSlug,
+              _id: { $ne: req.params.id }, // Exclude current blog
+            });
 
-        if (slugExists) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "A blog with this slug already exists. Please use a different slug.",
-          });
+            if (slugExists) {
+              return res.status(400).json({
+                success: false,
+                message:
+                  "A blog with this slug already exists. Please use a different slug.",
+              });
+            }
+
+            // Set the new slug
+            blog.slug = customSlug;
+          }
         }
-
-        // Set the new slug
-        blog.slug = customSlug;
       }
 
       // Update blog fields

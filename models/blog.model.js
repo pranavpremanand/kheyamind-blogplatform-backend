@@ -90,16 +90,17 @@ blogSchema.index({ title: 'text', content: 'text' }); // For text search
 
 // Create slug from title before saving
 blogSchema.pre('save', async function(next) {
-  // Only update slug if title is modified or slug is not set
-  if (!this.slug || this.isModified('title')) {
-    // Basic slug from title
+  // Only update slug if slug is not set (new blog without custom slug)
+  // or if title is modified AND slug was auto-generated from title before
+  if (!this.slug) {
+    // No slug provided, generate from title
     let baseSlug = slugify(this.title);
     
     // Check if slug exists
     let slugExists = await mongoose.models.Blog.exists({ slug: baseSlug });
     
     // If slug exists, add a unique timestamp suffix
-    if (slugExists && (!this.slug || this.slug !== baseSlug)) {
+    if (slugExists) {
       const timestamp = Math.floor(Date.now() / 1000).toString().slice(-6);
       this.slug = `${baseSlug}-${timestamp}`;
     } else {
