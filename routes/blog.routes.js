@@ -32,7 +32,7 @@ router.get("/", async (req, res) => {
     let query = Blog.find(filter)
       .sort({ createdAt: -1 })
       .lean() // Use lean() to get plain JS objects instead of Mongoose documents (faster)
-      .select("-content") // Exclude large content field initially for better performance
+      .select('title slug excerpt imageUrl imageAlt tags publishDate status isFeatured createdAt categoryId authorId author') // Select only necessary fields
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -50,7 +50,7 @@ router.get("/", async (req, res) => {
     }
 
     // Execute query with timeout option
-    const blogs = await query.maxTimeMS(20000); // Set 20 second timeout for this query
+    const blogs = await query.maxTimeMS(20000);
 
     // Get total count with a separate, simpler query
     // Use estimatedDocumentCount if no filters for better performance
@@ -313,6 +313,7 @@ router.get("/featured", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id)
+      .lean()
       .populate("authorId", "name")
       .populate("categoryId", "name")
       .populate("author", "name");
@@ -344,6 +345,7 @@ router.get("/:id", async (req, res) => {
 router.get("/slug/:slug", async (req, res) => {
   try {
     const blog = await Blog.findOne({ slug: req.params.slug })
+      .lean()
       .populate("author", "name")
       .populate("authorId", "name")
       .populate("categoryId", "name");
@@ -381,118 +383,295 @@ router.get("/slug/:slug", async (req, res) => {
 // @route   POST /api/blogs
 // @desc    Create a new blog with image upload
 // @access  Private (Admin only)
-router.post("/", authenticate, authorizeAdmin, (req, res) => {
-  // Use upload middleware with improved error handling
-  upload.single("image")(req, res, async (err) => {
-    try {
-      if (err) {
-        if (err instanceof multer.MulterError) {
-          // A Multer error occurred when uploading
-          if (err.code === "LIMIT_FILE_SIZE") {
+router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (req, res) => {
+  try {
+    // Log request body for debugging
+    console.log('Request body:', req.body);
+    console.log('Uploaded file:', req.file);
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Blog image is required",
+      });
+    }
+
+    const {
+      title,
+      content,
+      metaDescription,
+      metaKeywords,
+      status,
+      authorId,
+      categoryId,
+      tags,
+      excerpt,
+      imageAlt,
+      isFeatured,
+      publishDate,
+      slug,
+    } = req.body;
+
+    // Image URL is now provided by Cloudinary
+    const imageUrl = req.file.path;
+    console.log('Cloudinary image URL:', imageUrl);
+
+    // Validate required fields
+    if (!title) {
+      return res.status(400).json({
+        success: false,
+        message: "Title is required",
+      });
+    }
+
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        message: "Content is required",
+      });
+    }
+
+    if (!excerpt) {
+      return res.status(400).json({
+        success: false,
+        message: "Excerpt is required",
+      });
+    }
+
+    if (!imageAlt) {
+      return res.status(400).json({
+        success: false,
+        message: "Image alt text is required",
+      });
+    }
+
+    if (!categoryId) {
+      return res.status(400).json({
+        success: false,
+        message: "Category is required",
+      });
+    }
+
+    if (!authorId) {
+      return res.status(400).json({
+        success: false,
+        message: "Author is required",
+      });
+    }
+
+    if (
+      !tags ||
+      (Array.isArray(tags) && tags.length === 0) ||
+      (typeof tags === "string" && tags.trim() === "")
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one tag is required",
+      });
+    }
+
+    // Ensure tags is properly formatted
+    let formattedTags;
+    if (Array.isArray(tags)) {
+      // Filter out any empty tags
+      formattedTags = tags.filter((tag) => tag && tag.trim() !== "");
+      if (formattedTags.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one non-empty tag is required",
+        });
+      }
+    } else if (typeof tags === "string") {
+      // Split by comma and filter out empty tags
+      formattedTags = tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag !== "");
+      if (formattedTags.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one non-empty tag is required",
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Tags must be provided as a string or array",
+      });
+    }
+
+    // Process custom slug if provided
+    let customSlug = null;
+    if (slug) {
+      customSlug = slugify(slug);
+      // Check if the slug already exists
+      const slugExists = await Blog.findOne({ slug: customSlug });
+      if (slugExists) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A blog with this slug already exists. Please use a different slug.",
+        });
+      }
+    }
+
+    // Create blog with Cloudinary image URL
+    const blog = new Blog({
+      title,
+      content,
+      author: req.user._id,
+      metaDescription,
+      metaKeywords: metaKeywords
+        ? Array.isArray(metaKeywords)
+          ? metaKeywords
+          : metaKeywords.split(",").map((kw) => kw.trim())
+        : [],
+      imageUrl,
+      status: status || "published",
+      authorId: authorId,
+      categoryId: categoryId,
+      tags: formattedTags,
+      excerpt: excerpt,
+      imageAlt: imageAlt,
+      isFeatured: isFeatured === "true" || isFeatured === true,
+      publishDate: publishDate ? new Date(publishDate) : new Date(),
+      ...(customSlug && { slug: customSlug }),
+    });
+
+    await blog.save();
+    await blog.populate("author", "name");
+    if (blog.categoryId) await blog.populate("categoryId", "name");
+    if (blog.authorId) await blog.populate("authorId", "name");
+
+    res.status(201).json({
+      success: true,
+      blog,
+    });
+  } catch (error) {
+    // Enhanced error logging
+    console.error('Blog creation error:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      fullError: error
+    });
+
+    // Send a more detailed error response
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to create blog",
+      error: {
+        name: error.name,
+        details: error.message
+      }
+    });
+  }
+});
+
+// @route   PUT /api/blogs/:id
+// @desc    Update a blog with image upload
+// @access  Private (Admin only)
+router.put("/:id", authenticate, authorizeAdmin, upload.single("image"), async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id);
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: "Blog not found",
+      });
+    }
+
+    const {
+      title,
+      content,
+      metaDescription,
+      metaKeywords,
+      status,
+      authorId,
+      categoryId,
+      tags,
+      excerpt,
+      imageAlt,
+      isFeatured,
+      slug,
+      publishDate,
+    } = req.body;
+
+    // Check if a custom slug was provided
+    if (slug !== undefined) {
+      // If slug is empty string, don't update it (keep the existing one)
+      if (slug !== "") {
+        const customSlug = slugify(slug);
+        // Only check for duplicates if the slug is actually changing
+        if (customSlug !== blog.slug) {
+          // Check if the new slug already exists in another blog
+          const slugExists = await Blog.findOne({
+            slug: customSlug,
+            _id: { $ne: req.params.id }, // Exclude current blog
+          });
+
+          if (slugExists) {
             return res.status(400).json({
               success: false,
-              message: "File size too large. Max size is 2MB.",
-            });
-          }
-          if (err.code === "LIMIT_FIELD_VALUE") {
-            return res.status(400).json({
               message:
-                "Field value too large. Maximum field size is 2MB. Try reducing content size.",
+                "A blog with this slug already exists. Please use a different slug.",
             });
           }
-          return res
-            .status(400)
-            .json({ message: `Upload error: ${err.message}` });
-        } else {
-          // An unknown error occurred
-          return res
-            .status(500)
-            .json({ message: `Server error: ${err.message}` });
+
+          // Set the new slug
+          blog.slug = customSlug;
         }
       }
+    }
 
-      const {
-        title,
-        content,
-        metaDescription,
-        metaKeywords,
-        status,
-        authorId,
-        categoryId,
-        tags,
-        excerpt,
-        imageAlt,
-        isFeatured,
-        publishDate,
-        slug,
-      } = req.body;
+    // Validate required fields
+    if (title === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Title cannot be empty",
+      });
+    }
 
-      // Check if image was uploaded (required)
-      if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          message: "Blog image is required",
-        });
-      }
+    if (content === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Content cannot be empty",
+      });
+    }
 
-      // Validate required fields
-      if (!title) {
-        return res.status(400).json({
-          success: false,
-          message: "Title is required",
-        });
-      }
+    if (excerpt === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Excerpt cannot be empty",
+      });
+    }
 
-      if (!content) {
-        return res.status(400).json({
-          success: false,
-          message: "Content is required",
-        });
-      }
+    if (imageAlt === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Image alt text cannot be empty",
+      });
+    }
 
-      if (!excerpt) {
-        return res.status(400).json({
-          success: false,
-          message: "Excerpt is required",
-        });
-      }
+    if (categoryId === null || categoryId === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Category is required",
+      });
+    }
 
-      if (!imageAlt) {
-        return res.status(400).json({
-          success: false,
-          message: "Image alt text is required",
-        });
-      }
+    if (authorId === null || authorId === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Author is required",
+      });
+    }
 
-      if (!categoryId) {
-        return res.status(400).json({
-          success: false,
-          message: "Category is required",
-        });
-      }
-
-      if (!authorId) {
-        return res.status(400).json({
-          success: false,
-          message: "Author is required",
-        });
-      }
-
-      if (
-        !tags ||
-        (Array.isArray(tags) && tags.length === 0) ||
-        (typeof tags === "string" && tags.trim() === "")
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one tag is required",
-        });
-      }
-
-      // Ensure tags is properly formatted
-      let formattedTags;
+    // Format tags if provided
+    let formattedTags;
+    if (tags !== undefined) {
       if (Array.isArray(tags)) {
-        // Filter out any empty tags
         formattedTags = tags.filter((tag) => tag && tag.trim() !== "");
         if (formattedTags.length === 0) {
           return res.status(400).json({
@@ -501,7 +680,6 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           });
         }
       } else if (typeof tags === "string") {
-        // Split by comma and filter out empty tags
         formattedTags = tags
           .split(",")
           .map((tag) => tag.trim())
@@ -518,321 +696,62 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           message: "Tags must be provided as a string or array",
         });
       }
-
-      let imageUrl;
-
-      if (req.file) {
-        // Convert buffer to base64 string if file was uploaded
-        imageUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString(
-          "base64"
-        )}`;
-      } else if (req.body.imageUrl) {
-        // Use the provided image URL
-        imageUrl = req.body.imageUrl;
-      } else {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Blog image is required (either upload a file or provide an imageUrl)",
-        });
-      }
-      // Process custom slug if provided
-      let customSlug = null;
-      if (slug) {
-        customSlug = slugify(slug);
-        // Check if the slug already exists
-        const slugExists = await Blog.findOne({ slug: customSlug });
-        if (slugExists) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "A blog with this slug already exists. Please use a different slug.",
-          });
-        }
-      }
-
-      // Create blog
-      const blog = new Blog({
-        title,
-        content,
-        author: req.user._id,
-        metaDescription,
-        metaKeywords: metaKeywords
-          ? Array.isArray(metaKeywords)
-            ? metaKeywords
-            : metaKeywords.split(",").map((kw) => kw.trim())
-          : [],
-        imageUrl,
-        status: status || "published",
-        authorId: authorId,
-        categoryId: categoryId,
-        tags: formattedTags,
-        excerpt: excerpt,
-        imageAlt: imageAlt,
-        isFeatured: isFeatured === "true" || isFeatured === true,
-        publishDate: publishDate ? new Date(publishDate) : new Date(),
-        // Set custom slug if provided
-        ...(customSlug && { slug: customSlug }),
-      });
-
-      await blog.save();
-      await blog.populate("author", "name");
-      if (blog.categoryId) await blog.populate("categoryId", "name");
-      if (blog.authorId) await blog.populate("authorId", "name");
-
-      res.status(201).json({
-        success: true,
-        blog,
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to create blog",
-        error: error.message,
-      });
     }
-  });
-});
 
-// @route   PUT /api/blogs/:id
-// @desc    Update a blog with image upload
-// @access  Private (Admin only)
-router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
-  // Use upload middleware with improved error handling
-  upload.single("image")(req, res, async (err) => {
-    try {
-      if (err) {
-        if (err instanceof multer.MulterError) {
-          // A Multer error occurred when uploading
-          if (err.code === "LIMIT_FILE_SIZE") {
-            return res
-              .status(400)
-              .json({ message: "File size too large. Max size is 5MB." });
-          }
-          if (err.code === "LIMIT_FIELD_VALUE") {
-            return res.status(400).json({
-              message:
-                "Field value too large. Maximum field size is 5MB. Try reducing content size.",
-            });
-          }
-          return res
-            .status(400)
-            .json({ message: `Upload error: ${err.message}` });
-        } else {
-          // An unknown error occurred
-          return res
-            .status(500)
-            .json({ message: `Server error: ${err.message}` });
-        }
-      }
+    // Update blog fields
+    blog.title = title || blog.title;
+    blog.content = content || blog.content;
+    blog.metaDescription =
+      metaDescription !== undefined ? metaDescription : blog.metaDescription;
+    blog.metaKeywords = metaKeywords
+      ? Array.isArray(metaKeywords)
+        ? metaKeywords
+        : metaKeywords.split(",").map((kw) => kw.trim())
+      : blog.metaKeywords;
+    blog.authorId = authorId !== undefined ? authorId : blog.authorId;
+    blog.categoryId = categoryId !== undefined ? categoryId : blog.categoryId;
+    blog.tags = formattedTags !== undefined ? formattedTags : blog.tags;
+    blog.excerpt = excerpt !== undefined ? excerpt : blog.excerpt;
+    blog.imageAlt = imageAlt !== undefined ? imageAlt : blog.imageAlt;
 
-      const {
-        title,
-        content,
-        metaDescription,
-        metaKeywords,
-        status,
-        authorId,
-        categoryId,
-        tags,
-        excerpt,
-        imageAlt,
-        isFeatured,
-        slug,
-        publishDate,
-      } = req.body;
-
-      console.log("Request body:", req.body);
-      console.log("isFeatured value:", isFeatured, "type:", typeof isFeatured);
-
-      const blog = await Blog.findById(req.params.id);
-
-      if (!blog) {
-        return res.status(404).json({
-          success: false,
-          message: "Blog not found",
-        });
-      }
-
-      // Check if a custom slug was provided
-      if (slug !== undefined) {
-        // If slug is empty string, don't update it (keep the existing one)
-        if (slug !== "") {
-          const customSlug = slugify(slug);
-          // Only check for duplicates if the slug is actually changing
-          if (customSlug !== blog.slug) {
-            // Check if the new slug already exists in another blog
-            const slugExists = await Blog.findOne({
-              slug: customSlug,
-              _id: { $ne: req.params.id }, // Exclude current blog
-            });
-
-            if (slugExists) {
-              return res.status(400).json({
-                success: false,
-                message:
-                  "A blog with this slug already exists. Please use a different slug.",
-              });
-            }
-
-            // Set the new slug
-            blog.slug = customSlug;
-          }
-        }
-      }
-
-      // Validate required fields
-      if (title === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Title cannot be empty",
-        });
-      }
-
-      if (content === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Content cannot be empty",
-        });
-      }
-
-      if (excerpt === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Excerpt cannot be empty",
-        });
-      }
-
-      if (imageAlt === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Image alt text cannot be empty",
-        });
-      }
-
-      if (categoryId === null || categoryId === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Category is required",
-        });
-      }
-
-      if (authorId === null || authorId === "") {
-        return res.status(400).json({
-          success: false,
-          message: "Author is required",
-        });
-      }
-
-      if (
-        tags !== undefined &&
-        ((Array.isArray(tags) && tags.length === 0) ||
-          (typeof tags === "string" && tags.trim() === ""))
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "At least one tag is required",
-        });
-      }
-
-      // Format tags if provided
-      let formattedTags;
-      if (tags !== undefined) {
-        if (Array.isArray(tags)) {
-          // Filter out any empty tags
-          formattedTags = tags.filter((tag) => tag && tag.trim() !== "");
-          if (formattedTags.length === 0) {
-            return res.status(400).json({
-              success: false,
-              message: "At least one non-empty tag is required",
-            });
-          }
-        } else if (typeof tags === "string") {
-          // Split by comma and filter out empty tags
-          formattedTags = tags
-            .split(",")
-            .map((tag) => tag.trim())
-            .filter((tag) => tag !== "");
-          if (formattedTags.length === 0) {
-            return res.status(400).json({
-              success: false,
-              message: "At least one non-empty tag is required",
-            });
-          }
-        } else {
-          return res.status(400).json({
-            success: false,
-            message: "Tags must be provided as a string or array",
-          });
-        }
-      }
-
-      // Update blog fields
-      blog.title = title || blog.title;
-      blog.content = content || blog.content;
-      blog.metaDescription =
-        metaDescription !== undefined ? metaDescription : blog.metaDescription;
-      blog.metaKeywords = metaKeywords
-        ? Array.isArray(metaKeywords)
-          ? metaKeywords
-          : metaKeywords.split(",").map((kw) => kw.trim())
-        : blog.metaKeywords;
-      blog.authorId = authorId !== undefined ? authorId : blog.authorId;
-      blog.categoryId = categoryId !== undefined ? categoryId : blog.categoryId;
-      blog.tags = formattedTags !== undefined ? formattedTags : blog.tags;
-      blog.excerpt = excerpt !== undefined ? excerpt : blog.excerpt;
-      blog.imageAlt = imageAlt !== undefined ? imageAlt : blog.imageAlt;
-
-      // Handle isFeatured properly for both true and false values
-      if (isFeatured !== undefined) {
-        // Convert string values to boolean
-        if (isFeatured === "true" || isFeatured === true) {
-          blog.isFeatured = true;
-        } else if (isFeatured === "false" || isFeatured === false) {
-          blog.isFeatured = false;
-        }
-      }
-
-      // Update image if a new one was uploaded or URL provided
-      if (req.file) {
-        // Convert buffer to base64 string
-        const imageBase64 = `data:${
-          req.file.mimetype
-        };base64,${req.file.buffer.toString("base64")}`;
-        blog.imageUrl = imageBase64;
-      } else if (req.body.imageUrl) {
-        // Use the provided image URL
-        blog.imageUrl = req.body.imageUrl;
-      }
-
-      blog.status = status || blog.status;
-
-      // Update publishDate if provided
-      if (publishDate) {
-        blog.publishDate = new Date(publishDate);
-      }
-
-      // updatedAt will be handled by the pre-save hook
-
-      await blog.save();
-      await blog.populate("author", "name");
-      if (blog.categoryId) await blog.populate("categoryId", "name");
-      if (blog.authorId) await blog.populate("authorId", "name");
-
-      res.json({
-        success: true,
-        blog,
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to update blog",
-        error: error.message,
-      });
+    // Handle isFeatured properly for both true and false values
+    if (isFeatured !== undefined) {
+      blog.isFeatured = isFeatured === "true" || isFeatured === true;
     }
-  });
+
+    // Update image if a new one was uploaded or URL provided
+    if (req.file) {
+      // Use the Cloudinary URL directly
+      blog.imageUrl = req.file.path;
+    } else if (req.body.imageUrl) {
+      // Use the provided image URL
+      blog.imageUrl = req.body.imageUrl;
+    }
+
+    blog.status = status || blog.status;
+
+    // Update publishDate if provided
+    if (publishDate) {
+      blog.publishDate = new Date(publishDate);
+    }
+
+    await blog.save();
+    await blog.populate("author", "name");
+    if (blog.categoryId) await blog.populate("categoryId", "name");
+    if (blog.authorId) await blog.populate("authorId", "name");
+
+    res.json({
+      success: true,
+      blog,
+    });
+  } catch (error) {
+    console.error('Blog update error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update blog",
+      error: error.message,
+    });
+  }
 });
 
 // @route   DELETE /api/blogs/:id
@@ -860,154 +779,6 @@ router.delete("/:id", authenticate, authorizeAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete blog",
-      error: error.message,
-    });
-  }
-});
-
-// @route   GET /api/blogs/published
-// @desc    Get all published blogs up to the current date
-// @access  Public
-router.get("/published", async (req, res) => {
-  try {
-    const currentDate = new Date();
-
-    // Filter for published blogs with publishDate less than or equal to current date
-    const filter = {
-      status: "published",
-      $or: [
-        { publishDate: { $lte: currentDate } },
-        { publishDate: { $exists: false } }, // For backward compatibility with old posts
-      ],
-    };
-
-    // Add search functionality
-    if (req.query.search) {
-      filter.$and = filter.$and || [];
-      filter.$and.push({
-        $or: [
-          { title: { $regex: req.query.search, $options: "i" } },
-          { content: { $regex: req.query.search, $options: "i" } },
-        ],
-      });
-    }
-
-    // Create query
-    let query = Blog.find(filter)
-      .sort({ publishDate: -1 }) // Sort by publishDate in descending order (newest first)
-      .populate("categoryId", "name")
-      .populate("authorId", "name")
-      .populate("author", "name");
-
-    // Apply pagination if requested
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      const skip = (page - 1) * limit;
-      query = query.skip(skip).limit(limit);
-    }
-
-    // Execute query
-    const blogs = await query;
-
-    // Get total count
-    const totalCount = await Blog.countDocuments(filter);
-
-    // Prepare response
-    const response = {
-      success: true,
-      blogs,
-      totalCount,
-    };
-
-    // Add pagination info if requested
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      response.currentPage = page;
-      response.totalPages = Math.ceil(totalCount / limit);
-    }
-
-    res.json(response);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch published blogs",
-      error: error.message,
-    });
-  }
-});
-
-// @route   GET /api/blogs/featured
-// @desc    Get featured blogs with optional pagination
-// @access  Public
-router.get("/featured", async (req, res) => {
-  try {
-    // Create filter for featured blogs
-    const filter = {
-      isFeatured: true,
-      // Also include status filter if specified
-      ...(req.query.status
-        ? { status: req.query.status }
-        : { status: "published" }),
-    };
-
-    // Filter for published blogs with publishDate in the past or equal to current date
-    const currentDate = new Date();
-    if (filter.status === "published") {
-      filter.$and = filter.$and || [];
-      filter.$and.push({
-        $or: [
-          { publishDate: { $lte: currentDate } },
-          { publishDate: { $exists: false } }, // For backward compatibility with old posts
-        ],
-      });
-    }
-
-    // Create query
-    let query = Blog.find(filter)
-      .sort({ publishDate: -1 }) // Sort by publishDate instead of createdAt
-      .populate("categoryId", "name")
-      .populate("authorId", "name")
-      .populate("author", "name");
-
-    // Apply pagination only if limit is specified
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      const skip = (page - 1) * limit;
-
-      query = query.skip(skip).limit(limit);
-    }
-
-    // Execute query
-    const blogs = await query;
-
-    // Get total count
-    const totalCount = await Blog.countDocuments(filter);
-
-    // Prepare response
-    const response = {
-      success: true,
-      blogs,
-      totalCount,
-    };
-
-    // Add pagination info only if limit was specified
-    if (req.query.limit) {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit);
-      response.currentPage = page;
-      response.totalPages = Math.ceil(totalCount / limit);
-    }
-
-    res.json(response);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch featured blogs",
       error: error.message,
     });
   }

@@ -1,4 +1,3 @@
-
 const mongoose = require('mongoose');
 const slugify = require('../utils/slugify');
 
@@ -64,7 +63,14 @@ const blogSchema = new mongoose.Schema({
   }],
   imageUrl: {
     type: String,
-    required: true
+    required: true,
+    validate: {
+      validator: function(v) {
+        // Basic URL validation
+        return /^(http|https):\/\/[^ "]+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid URL!`
+    }
   },
   status: {
     type: String,
@@ -89,41 +95,19 @@ const blogSchema = new mongoose.Schema({
 });
 
 // Create compound indexes for common query patterns
-blogSchema.index({ status: 1, publishDate: 1 }); // For published blogs with date filtering
-blogSchema.index({ status: 1, isFeatured: 1 }); // For featured published blogs
-blogSchema.index({ title: 'text', content: 'text' }); // For text search
+blogSchema.index({ status: 1, publishDate: 1 });
+blogSchema.index({ status: 1, isFeatured: 1 });
+blogSchema.index({ slug: 1 }, { unique: true });
 
-// Create slug from title before saving
-blogSchema.pre('save', async function(next) {
-  // Only update slug if slug is not set (new blog without custom slug)
-  // or if title is modified AND slug was auto-generated from title before
+// Add text index for better search performance
+blogSchema.index({ title: 'text', content: 'text', excerpt: 'text' });
+
+// Pre-save middleware to generate slug if not provided
+blogSchema.pre('save', function(next) {
   if (!this.slug) {
-    // No slug provided, generate from title
-    let baseSlug = slugify(this.title);
-    
-    // Check if slug exists
-    let slugExists = await mongoose.models.Blog.exists({ slug: baseSlug });
-    
-    // If slug exists, add a unique timestamp suffix
-    if (slugExists) {
-      const timestamp = Math.floor(Date.now() / 1000).toString().slice(-6);
-      this.slug = `${baseSlug}-${timestamp}`;
-    } else {
-      this.slug = baseSlug;
-    }
+    this.slug = slugify(this.title);
   }
-  
-  // Validate that tags array is not empty
-  if (this.tags.length === 0) {
-    const err = new Error('At least one tag is required');
-    return next(err);
-  }
-  
-  // Always update the updatedAt field if anything changed
-  if (this.isModified()) {
-    this.updatedAt = Date.now();
-  }
-  
+  this.updatedAt = new Date();
   next();
 });
 
