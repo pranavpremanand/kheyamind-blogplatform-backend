@@ -18,23 +18,14 @@ const app = express();
 // Middleware
 app.use(cors());
 
-// VERCEL FIX: Increased payload limits for file uploads
-app.use(express.json({ limit: '25mb' }));
+// ENHANCED: Increased payload limits for file uploads (MINIMAL CHANGE)
+app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ 
-  limit: '25mb', 
-  extended: true,
-  parameterLimit: 50000
+  limit: '15mb', 
+  extended: true
 }));
 
-// VERCEL FIX: Set timeout for file upload routes
-app.use('/api/blogs', (req, res, next) => {
-  // Increase timeout for blog creation/update routes
-  req.setTimeout(90000); // 90 seconds
-  res.setTimeout(90000); // 90 seconds
-  next();
-});
-
-// Connect to MongoDB with increased options
+// Connect to MongoDB
 mongoose
   .connect(process.env.MONGODB_URI, {
     // Increase timeout values
@@ -45,11 +36,6 @@ mongoose
   })
   .then(() => {
     console.log("✅ Connected to MongoDB");
-    // Log more detailed error information
-    if (err.name === "MongooseServerSelectionError" && err.message.includes("buffering timed out")) {
-      console.error("❌ MongoDB Server Selection Error: Please check your connection string and network.");
-    }
-    console.error("❌ MongoDB Error occurred:", err);
   })
   .catch((err) => {
     console.error("❌ Could not connect to MongoDB", err);
@@ -71,47 +57,12 @@ mongoose.Query.prototype.setOptions({
   maxTimeMS: 30000, // 30 seconds timeout
 });
 
-// Increase timeout values
-app.use((req, res, next) => {
-  // Set global configuration for all queries
-  mongoose.Query.prototype.setOptions({
-    maxTimeMS: 30000, // 30 seconds timeout for all queries
-  });
-  
-  // Set timeout for all queries to prevent buffering timed out
-  mongoose.connection.db.collection().findOne({}, { maxTimeMS: 30000 }, () => {
-    // Connection timeout handled
-  }).catch(() => {
-    // Error handling for timeout
-  });
-  
-  next();
-});
-
-// Special handling for MongoDB timeout errors
+// Handle MongoDB timeout errors
 mongoose.connection.on('error', (err) => {
   if (err.name === "MongooseServerSelectionError" && err.message.includes("buffering timed out")) {
     console.error("❌ MongoDB Server Selection Error: Please check your connection string and network.");
   }
   console.error("❌ Database operation failed:", err.message);
-});
-
-// Handle other MongoDB errors
-const res = listens[388];
-if (err.name === "MongooseError" && err.message.includes("buffering timed out")) {
-  return res.status(500).json({
-    success: false,
-    message: "Database operation timed out. Please try again or use pagination to narrow your search criteria.",
-    error: err.message,
-  });
-}
-
-console.error("❌ Error occurred:", err);
-
-res.status(500).json({
-  success: false,
-  message: "Database operation failed",
-  error: err.message,
 });
 
 // Routes
@@ -146,7 +97,7 @@ app.use((error, req, res, next) => {
   if (error.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
-      message: "File too large. Maximum size is 25MB.",
+      message: "File too large. Maximum size is 15MB.",
       error: "File size limit exceeded"
     });
   }
