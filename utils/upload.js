@@ -85,11 +85,6 @@ const upload = multer({
     if (!file.mimetype.startsWith('image/')) {
       return cb(new Error('Only image files are allowed!'), false);
     }
-
-    // Block PNG and GIF formats
-    if (file.mimetype === 'image/png' || file.mimetype === 'image/gif') {
-      return cb(new Error('PNG and GIF formats are not allowed. Please use JPG, JPEG, WebP, AVIF, TIFF, or BMP formats.'), false);
-    }
     
     // Log file details for debugging
     console.log('Processing file:', {
