@@ -59,7 +59,7 @@ const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'blog-images',
-    allowed_formats: ['jpg', 'jpeg', 'webp', 'avif', 'tiff', 'bmp'], // Allow all formats except PNG and GIF
+    allowed_formats: ['jpg', 'jpeg', 'webp', 'avif', 'tiff', 'bmp', 'gif', 'png'], 
     transformation: [
       { width: 800, height: 800, crop: "limit" }, // Limit image size
       { quality: "auto" }, // Automatic quality optimization
