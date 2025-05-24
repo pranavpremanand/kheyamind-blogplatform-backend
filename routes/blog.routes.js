@@ -32,7 +32,7 @@ router.get("/", async (req, res) => {
     let query = Blog.find(filter)
       .sort({ createdAt: -1 })
       .lean() // Use lean() to get plain JS objects instead of Mongoose documents (faster)
-      .select('-content') // Exclude large content field initially for better performance
+      .select("-content") // Exclude large content field initially for better performance
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -54,9 +54,10 @@ router.get("/", async (req, res) => {
 
     // Get total count with a separate, simpler query
     // Use estimatedDocumentCount if no filters for better performance
-    const totalCount = Object.keys(filter).length === 0 
-      ? await Blog.estimatedDocumentCount()
-      : await Blog.countDocuments(filter).maxTimeMS(10000);
+    const totalCount =
+      Object.keys(filter).length === 0
+        ? await Blog.estimatedDocumentCount()
+        : await Blog.countDocuments(filter).maxTimeMS(10000);
 
     // Prepare response
     const response = {
@@ -76,16 +77,20 @@ router.get("/", async (req, res) => {
     res.json(response);
   } catch (error) {
     console.error(error);
-    
+
     // Provide more specific error message for timeouts
-    if (error.name === 'MongooseError' && error.message.includes('buffering timed out')) {
+    if (
+      error.name === "MongooseError" &&
+      error.message.includes("buffering timed out")
+    ) {
       return res.status(500).json({
         success: false,
-        message: "Query timed out. Try using pagination or narrowing your search criteria.",
+        message:
+          "Query timed out. Try using pagination or narrowing your search criteria.",
         error: error.message,
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: "Failed to fetch blogs",
@@ -343,6 +348,15 @@ router.get("/slug/:slug", async (req, res) => {
       .populate("authorId", "name")
       .populate("categoryId", "name");
 
+    const currentDate = new Date();
+    // Check if the blog is published and the publish date is in the past
+    if (blog && blog.status === "published" && blog.publishDate > currentDate) {
+      return res.status(404).json({
+        success: false,
+        message: "Blog not found",
+      });
+    }
+
     if (!blog) {
       return res.status(404).json({
         success: false,
@@ -420,7 +434,7 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           message: "Blog image is required",
         });
       }
-      
+
       // Validate required fields
       if (!title) {
         return res.status(400).json({
@@ -428,66 +442,70 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
           message: "Title is required",
         });
       }
-      
+
       if (!content) {
         return res.status(400).json({
           success: false,
           message: "Content is required",
         });
       }
-      
+
       if (!excerpt) {
         return res.status(400).json({
           success: false,
           message: "Excerpt is required",
         });
       }
-      
+
       if (!imageAlt) {
         return res.status(400).json({
           success: false,
           message: "Image alt text is required",
         });
       }
-      
+
       if (!categoryId) {
         return res.status(400).json({
           success: false,
           message: "Category is required",
         });
       }
-      
+
       if (!authorId) {
         return res.status(400).json({
           success: false,
           message: "Author is required",
         });
       }
-      
-      if (!tags || (Array.isArray(tags) && tags.length === 0) || 
-          (typeof tags === 'string' && tags.trim() === '')) {
+
+      if (
+        !tags ||
+        (Array.isArray(tags) && tags.length === 0) ||
+        (typeof tags === "string" && tags.trim() === "")
+      ) {
         return res.status(400).json({
           success: false,
           message: "At least one tag is required",
         });
       }
-      
+
       // Ensure tags is properly formatted
       let formattedTags;
       if (Array.isArray(tags)) {
         // Filter out any empty tags
-        formattedTags = tags.filter(tag => tag && tag.trim() !== '');
+        formattedTags = tags.filter((tag) => tag && tag.trim() !== "");
         if (formattedTags.length === 0) {
           return res.status(400).json({
             success: false,
             message: "At least one non-empty tag is required",
           });
         }
-      } else if (typeof tags === 'string') {
+      } else if (typeof tags === "string") {
         // Split by comma and filter out empty tags
-        formattedTags = tags.split(',')
-          .map(tag => tag.trim())
-          .filter(tag => tag !== '');
+        formattedTags = tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag !== "");
         if (formattedTags.length === 0) {
           return res.status(400).json({
             success: false,
@@ -527,7 +545,8 @@ router.post("/", authenticate, authorizeAdmin, (req, res) => {
         if (slugExists) {
           return res.status(400).json({
             success: false,
-            message: "A blog with this slug already exists. Please use a different slug.",
+            message:
+              "A blog with this slug already exists. Please use a different slug.",
           });
         }
       }
@@ -639,7 +658,7 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
       // Check if a custom slug was provided
       if (slug !== undefined) {
         // If slug is empty string, don't update it (keep the existing one)
-        if (slug !== '') {
+        if (slug !== "") {
           const customSlug = slugify(slug);
           // Only check for duplicates if the slug is actually changing
           if (customSlug !== blog.slug) {
@@ -664,74 +683,77 @@ router.put("/:id", authenticate, authorizeAdmin, (req, res) => {
       }
 
       // Validate required fields
-      if (title === '') {
+      if (title === "") {
         return res.status(400).json({
           success: false,
           message: "Title cannot be empty",
         });
       }
-      
-      if (content === '') {
+
+      if (content === "") {
         return res.status(400).json({
           success: false,
           message: "Content cannot be empty",
         });
       }
-      
-      if (excerpt === '') {
+
+      if (excerpt === "") {
         return res.status(400).json({
           success: false,
           message: "Excerpt cannot be empty",
         });
       }
-      
-      if (imageAlt === '') {
+
+      if (imageAlt === "") {
         return res.status(400).json({
           success: false,
           message: "Image alt text cannot be empty",
         });
       }
-      
-      if (categoryId === null || categoryId === '') {
+
+      if (categoryId === null || categoryId === "") {
         return res.status(400).json({
           success: false,
           message: "Category is required",
         });
       }
-      
-      if (authorId === null || authorId === '') {
+
+      if (authorId === null || authorId === "") {
         return res.status(400).json({
           success: false,
           message: "Author is required",
         });
       }
-      
-      if (tags !== undefined && 
-          ((Array.isArray(tags) && tags.length === 0) || 
-           (typeof tags === 'string' && tags.trim() === ''))) {
+
+      if (
+        tags !== undefined &&
+        ((Array.isArray(tags) && tags.length === 0) ||
+          (typeof tags === "string" && tags.trim() === ""))
+      ) {
         return res.status(400).json({
           success: false,
           message: "At least one tag is required",
         });
       }
-      
+
       // Format tags if provided
       let formattedTags;
       if (tags !== undefined) {
         if (Array.isArray(tags)) {
           // Filter out any empty tags
-          formattedTags = tags.filter(tag => tag && tag.trim() !== '');
+          formattedTags = tags.filter((tag) => tag && tag.trim() !== "");
           if (formattedTags.length === 0) {
             return res.status(400).json({
               success: false,
               message: "At least one non-empty tag is required",
             });
           }
-        } else if (typeof tags === 'string') {
+        } else if (typeof tags === "string") {
           // Split by comma and filter out empty tags
-          formattedTags = tags.split(',')
-            .map(tag => tag.trim())
-            .filter(tag => tag !== '');
+          formattedTags = tags
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter((tag) => tag !== "");
           if (formattedTags.length === 0) {
             return res.status(400).json({
               success: false,
@@ -992,4 +1014,3 @@ router.get("/featured", async (req, res) => {
 });
 
 module.exports = router;
-
