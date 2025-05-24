@@ -8,7 +8,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 // Debug environment variables (without exposing secrets)
-console.log('Cloudinary Configuration Status:', {
+console.log('🔧 Cloudinary Configuration Status:', {
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME ? 'Set' : 'Missing',
   api_key: process.env.CLOUDINARY_API_KEY ? 'Set' : 'Missing',
   api_secret: process.env.CLOUDINARY_API_SECRET ? 'Set' : 'Missing'
@@ -16,16 +16,17 @@ console.log('Cloudinary Configuration Status:', {
 
 // Verify Cloudinary credentials
 if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-  console.error('Missing Cloudinary credentials. Please check your .env file.');
+  console.error('❌ Missing Cloudinary credentials. Please check your .env file.');
   throw new Error('Missing Cloudinary credentials!');
 }
 
-// Configure Cloudinary with timeout and error handling
+// VERCEL-OPTIMIZED: Configure Cloudinary with extended timeout
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-  timeout: 60000 // 60 seconds timeout
+  timeout: 90000, // 90 seconds timeout for Vercel
+  secure: true
 });
 
 // Test Cloudinary connection
@@ -49,7 +50,7 @@ const testConnection = async () => {
 
 testConnection();
 
-// WEBP-OPTIMIZED: Storage configuration for KheyaMind AI Blog
+// VERCEL-OPTIMIZED: Storage configuration for KheyaMind AI Blog
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
@@ -58,91 +59,61 @@ const storage = new CloudinaryStorage({
     // WEBP-FIRST: Convert all images to WebP for optimal performance
     format: async (req, file) => {
       const originalFormat = file.mimetype.split('/')[1];
-      
-      // Handle different input formats - all convert to WebP
-      if (originalFormat === 'gif') {
-        // Animated GIFs become animated WebP
-        return 'webp';
-      } else if (['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'].includes(originalFormat)) {
-        // All static images become WebP
-        return 'webp';
-      } else {
-        // Fallback for other formats
-        return 'webp';
-      }
+      console.log(`🔄 Converting ${originalFormat.toUpperCase()} → WebP`);
+      return 'webp'; // Always convert to WebP
     },
     
-    // OPTIMIZED: Smart quality and transformation settings
+    // VERCEL-OPTIMIZED: Smart transformation settings
     transformation: async (req, file) => {
       const originalFormat = file.mimetype.split('/')[1];
+      const fileSize = file.size || 0;
+      const fileSizeKB = Math.round(fileSize / 1024);
       
       if (originalFormat === 'gif') {
-        // Special handling for animated GIFs
+        console.log(`🎬 Processing GIF: ${fileSizeKB}KB - optimized for Vercel`);
+        
+        // VERCEL FIX: Optimized settings for GIFs to prevent timeout
         return [
           { format: "webp" },
-          { quality: "auto:good" }, // Good quality for animations
+          { quality: "auto:eco" }, // Lower quality for faster processing
           { flags: "animated" }, // Preserve animation
-          { crop: "limit", width: 1200, height: 1200 } // Limit size for performance
+          { crop: "limit", width: 800, height: 600 } // Smaller dimensions for speed
         ];
       } else {
-        // Static images optimization for KheyaMind AI blog
+        // Static images optimization
         return [
           { format: "webp" },
-          { quality: "auto:good" }, // Excellent quality with good compression
-          { flags: "progressive" }, // Progressive loading
-          { crop: "limit", width: 1920, height: 1920 } // Limit max dimensions
+          { quality: "auto:good" },
+          { flags: "progressive" },
+          { crop: "limit", width: 1200, height: 900 }
         ];
       }
     },
     
-    // Pre-generate multiple sizes for responsive KheyaMind AI blog
-    eager: [
-      // Blog thumbnail (400px width)
-      {
-        width: 400,
-        height: 300,
-        crop: "fill",
-        gravity: "auto",
-        format: "webp",
-        quality: "auto:good"
-      },
-      // Blog medium (800px width)
-      {
-        width: 800,
-        height: 600,
-        crop: "limit",
-        format: "webp",
-        quality: "auto:good"
-      },
-      // Blog large (1200px width)
-      {
-        width: 1200,
-        height: 900,
-        crop: "limit",
-        format: "webp",
-        quality: "auto:best"
-      }
-    ],
+    // VERCEL FIX: Removed eager transformations to prevent timeout
+    // eager: [], // Commented out - causes timeouts on Vercel
     
     public_id: (req, file) => {
       const originalFormat = file.mimetype.split('/')[1];
       const timestamp = Date.now();
+      const fileSize = Math.round((file.size || 0) / 1024);
       
       if (originalFormat === 'gif') {
-        return `blog_animated_${timestamp}`;
+        return `blog_gif_${fileSize}kb_${timestamp}`;
       } else {
         return `blog_image_${timestamp}`;
       }
     },
     
-    // Metadata and optimization
-    use_filename: true,
-    unique_filename: false,
-    overwrite: false
+    // VERCEL-OPTIMIZED: Streamlined options
+    use_filename: false, // Disable to speed up processing
+    unique_filename: true,
+    overwrite: false,
+    timeout: 60000 // 60 seconds timeout
   }
 });
 
-// Configure multer with enhanced file handling for KheyaMind AI
+// VERCEL-OPTIMIZED: Multer configuration with enhanced limits
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
@@ -158,66 +129,82 @@ const upload = multer({
     ];
     
     if (allowedTypes.includes(file.mimetype)) {
-      console.log(`✅ Accepting ${file.mimetype} file: ${file.originalname} (will convert to WebP)`);
+      const fileSizeKB = Math.round((file.size || 0) / 1024);
+      console.log(`✅ Accepting ${file.mimetype}: ${file.originalname} (${fileSizeKB}KB → WebP)`);
       cb(null, true);
     } else {
+      console.log(`❌ Rejecting ${file.mimetype}: ${file.originalname}`);
       cb(new Error(`❌ Unsupported file type: ${file.mimetype}. Supported: JPG, PNG, GIF, BMP, TIFF, WebP`), false);
     }
   },
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit (increased for GIFs)
-    files: 1 // Only allow 1 file per request
+    fileSize: 25 * 1024 * 1024, // 25MB limit for Vercel
+    files: 1,
+    fieldSize: 5 * 1024 * 1024, // 5MB field size
+    parts: 10,
+    headerPairs: 20
   }
 });
 
 // HELPER: Generate responsive WebP URLs for KheyaMind AI blog
 const generateWebPUrls = (publicId, options = {}) => {
-  const baseUrl = cloudinary.url(publicId, {
-    format: 'webp',
-    quality: 'auto:good',
-    ...options
-  });
-  
-  return {
-    // Original WebP
-    original: baseUrl,
-    
-    // Responsive sizes for KheyaMind AI blog
-    thumbnail: cloudinary.url(publicId, {
+  try {
+    const baseUrl = cloudinary.url(publicId, {
       format: 'webp',
       quality: 'auto:good',
-      width: 400,
-      height: 300,
-      crop: 'fill',
-      gravity: 'auto'
-    }),
+      ...options
+    });
     
-    medium: cloudinary.url(publicId, {
-      format: 'webp',
-      quality: 'auto:good',
-      width: 800,
-      height: 600,
-      crop: 'limit'
-    }),
-    
-    large: cloudinary.url(publicId, {
-      format: 'webp',
-      quality: 'auto:best',
-      width: 1200,
-      height: 900,
-      crop: 'limit'
-    }),
-    
-    // Mobile-optimized for KheyaMind AI's global audience
-    mobile: cloudinary.url(publicId, {
-      format: 'webp',
-      quality: 'auto:eco',
-      width: 480,
-      height: 360,
-      crop: 'fill',
-      gravity: 'auto'
-    })
-  };
+    return {
+      // Original WebP
+      original: baseUrl,
+      
+      // Responsive sizes for KheyaMind AI blog
+      thumbnail: cloudinary.url(publicId, {
+        format: 'webp',
+        quality: 'auto:good',
+        width: 400,
+        height: 300,
+        crop: 'fill',
+        gravity: 'auto'
+      }),
+      
+      medium: cloudinary.url(publicId, {
+        format: 'webp',
+        quality: 'auto:good',
+        width: 800,
+        height: 600,
+        crop: 'limit'
+      }),
+      
+      large: cloudinary.url(publicId, {
+        format: 'webp',
+        quality: 'auto:best',
+        width: 1200,
+        height: 900,
+        crop: 'limit'
+      }),
+      
+      // Mobile-optimized for KheyaMind AI's global audience
+      mobile: cloudinary.url(publicId, {
+        format: 'webp',
+        quality: 'auto:eco',
+        width: 480,
+        height: 360,
+        crop: 'fill',
+        gravity: 'auto'
+      })
+    };
+  } catch (error) {
+    console.warn('⚠️ URL generation error:', error.message);
+    return { 
+      original: cloudinary.url(publicId, { format: 'webp' }),
+      thumbnail: null,
+      medium: null,
+      large: null,
+      mobile: null
+    };
+  }
 };
 
 // HELPER: Check if file is animated (for GIFs)
@@ -284,7 +271,7 @@ const uploadToWebP = async (fileBuffer, filename, options = {}) => {
   try {
     // Detect file type from buffer
     const isGif = filename.toLowerCase().endsWith('.gif');
-    const mimeType = isGif ? 'image/gif' : 'image/jpeg'; // Default assumption
+    const mimeType = isGif ? 'image/gif' : 'image/jpeg';
     
     // Convert buffer to base64
     const base64Data = `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
@@ -297,7 +284,7 @@ const uploadToWebP = async (fileBuffer, filename, options = {}) => {
       format: 'webp',
       
       // Smart quality based on content type
-      quality: isGif ? 'auto:good' : 'auto:best',
+      quality: isGif ? 'auto:eco' : 'auto:good', // Lower quality for GIFs
       
       // Preserve animations for GIFs
       flags: isGif ? 'animated' : 'progressive',
@@ -305,23 +292,11 @@ const uploadToWebP = async (fileBuffer, filename, options = {}) => {
       // Resource type
       resource_type: 'image',
       
-      // Responsive breakpoints (auto-generate multiple sizes)
-      responsive_breakpoints: [
-        {
-          create_derived: true,
-          bytes_step: 20000,
-          min_width: 200,
-          max_width: 1200,
-          transformation: {
-            crop: 'scale',
-            format: 'webp',
-            quality: 'auto:good'
-          }
-        }
-      ],
-      
       // Original filename for reference
       original_filename: filename,
+      
+      // Timeout for large files
+      timeout: 60000,
       
       // Additional options
       ...options
