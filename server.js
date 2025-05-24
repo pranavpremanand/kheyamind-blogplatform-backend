@@ -18,72 +18,87 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://kheyamind-blogplatform-backend.vercel.app', 'https://www.kheyamind.ai'] 
+    : ['http://localhost:3000', 'http://localhost:5000'],
+  credentials: true
+}));
 
 // Increased JSON payload size limit to 50MB
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-app.use(morgan("dev"));
 
-// No longer serving uploaded files from filesystem as we're using base64 images
+// Only use morgan in development to reduce serverless function overhead
+if (process.env.NODE_ENV !== 'production') {
+  app.use(morgan("dev"));
+}
 
-// Connect to MongoDB with improved options
-mongoose
-  .connect(process.env.MONGODB_URI, {
-    // Increase timeout values
-    serverSelectionTimeoutMS: 30000, // 30 seconds
-    socketTimeoutMS: 45000, // 45 seconds
-    // Performance and reliability options
-    maxPoolSize: 50, // Increase connection pool size
-    minPoolSize: 5, // Minimum connections to maintain
-    connectTimeoutMS: 30000, // Connection timeout
-    // Enable unified topology
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => {
+// MongoDB Connection - Optimized for Vercel serverless
+let isConnected = false;
+
+const connectDB = async () => {
+  if (isConnected) {
+    return;
+  }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      // Optimized for serverless functions
+      serverSelectionTimeoutMS: 5000, // Reduced timeout for serverless
+      socketTimeoutMS: 10000, // Reduced socket timeout
+      maxPoolSize: 10, // Reduced pool size for serverless
+      minPoolSize: 1,
+      connectTimeoutMS: 10000,
+      bufferCommands: false, // Disable mongoose buffering
+      bufferMaxEntries: 0, // Disable mongoose buffering
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+
+    isConnected = true;
     console.log("Connected to MongoDB");
 
     // Set global configuration for all queries
-    mongoose.set('maxTimeMS', 30000); // 30 second timeout for all queries
+    mongoose.set('maxTimeMS', 10000); // Reduced timeout for serverless
 
-    // Add a global timeout handler for all MongoDB operations
-    const originalExec = mongoose.Query.prototype.exec;
-    mongoose.Query.prototype.exec = function(...args) {
-      // Set a default timeout if not already set
-      if (!this.options.maxTimeMS) {
-        this.options.maxTimeMS = 30000; // 30 seconds default timeout
-      }
-      
-      // Add better error handling for timeouts
-      return originalExec.apply(this, args).catch(err => {
-        if (err.message && err.message.includes('buffering timed out')) {
-          console.error(`MongoDB query timeout: ${this.getQuery()}`);
-          err.message = 'Query timed out. Try using pagination or narrowing your search criteria.';
-        }
-        throw err;
-      });
-    };
-
-    const PORT = process.env.PORT || 5000;
-
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error("Could not connect to MongoDB", err);
-    // Log more detailed error information
-    if (err.name === "MongoServerSelectionError") {
-      console.error(
-        "MongoDB Server Selection Error. Please check your connection string and network."
-      );
-    }
-  });
+    throw err;
+  }
+};
+
+// Middleware to ensure DB connection
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("Database connection failed:", error);
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed",
+      error: process.env.NODE_ENV === "development" ? error.message : "Database unavailable"
+    });
+  }
+});
 
 // Test route
 app.get("/", (req, res) => {
-  res.send("Hello World");
+  res.json({ 
+    message: "KheyaMind Blog Platform API",
+    version: "1.0.0",
+    status: "active"
+  });
+});
+
+// Health check route
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+  });
 });
 
 // Routes
@@ -93,14 +108,9 @@ app.use("/api/users", userRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/authors", authorRoutes);
 
-// Health check route
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok" });
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("Error:", err.message);
   
   // Special handling for MongoDB timeout errors
   if (err.name === 'MongooseError' && err.message.includes('buffering timed out')) {
@@ -120,13 +130,40 @@ app.use((err, req, res, next) => {
       error: process.env.NODE_ENV === "development" ? err.message : "Database operation failed",
     });
   }
+
+  // Handle Vercel timeout errors
+  if (err.code === 'FUNCTION_INVOCATION_TIMEOUT') {
+    return res.status(504).json({
+      success: false,
+      message: "Request timeout - the operation took too long to complete",
+      error: "Function timeout"
+    });
+  }
   
   // Default error handler
   res.status(500).json({
     success: false,
     message: "Something went wrong!",
-    error: process.env.NODE_ENV === "development" ? err.message : {},
+    error: process.env.NODE_ENV === "development" ? err.message : "Internal server error",
   });
 });
 
+// Handle 404 routes
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+    path: req.originalUrl
+  });
+});
+
+// For Vercel serverless deployment
 module.exports = app;
+
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
