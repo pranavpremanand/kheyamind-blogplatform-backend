@@ -1,150 +1,102 @@
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const dotenv = require('dotenv');
 
-// VERCEL FIX: Only load dotenv in development
-if (process.env.NODE_ENV !== 'production') {
-  require('dotenv').config();
+// Load environment variables
+dotenv.config();
+
+// Debug environment variables (without exposing secrets)
+console.log('Cloudinary Configuration Status:', {
+  cloudName: process.env.CLOUDINARY_CLOUD_NAME ? 'Set' : 'Missing',
+  apiKey: process.env.CLOUDINARY_API_KEY ? 'Set' : 'Missing',
+  apiSecret: process.env.CLOUDINARY_API_SECRET ? 'Set' : 'Missing'
+});
+
+// Verify Cloudinary credentials
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+  console.error('Missing Cloudinary credentials. Please check your .env file');
+  console.error('Required variables:', {
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME ? 'Present' : 'Missing',
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? 'Present' : 'Missing',
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? 'Present' : 'Missing'
+  });
+  throw new Error('Missing Cloudinary credentials');
 }
 
-// VERCEL FIX: Simplified configuration without debug logs that can cause issues
+// Configure Cloudinary with timeout and error handling
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true
+  timeout: 60000 // 60 seconds timeout
 });
 
-// VERCEL FIX: Removed async connection test that can block deployment
-// Connection will be tested during actual upload operations
+// Test Cloudinary connection
+const testConnection = async () => {
+  try {
+    const result = await cloudinary.uploader.upload(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      {
+        folder: "blog-images",
+        public_id: "test-connection"
+      }
+    );
+    console.log('Cloudinary connection successful');
+    // Clean up test image
+    await cloudinary.uploader.destroy(result.public_id);
+  } catch (error) {
+    console.error('Cloudinary connection failed:', error);
+    throw new Error('Failed to connect to Cloudinary: ' + error.message);
+  }
+};
 
-// VERCEL-OPTIMIZED: Simplified storage configuration
+// Run the connection test
+testConnection().catch(console.error);
+
+// Configure storage with error handling
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: "blog-images",
-    
-    // SIMPLIFIED: Basic WebP conversion without complex async operations
-    format: 'webp',
-    
-    // VERCEL-OPTIMIZED: Static transformation settings to avoid async complexity
+    folder: 'blog-images',
+    allowed_formats: ['jpg', 'jpeg', 'webp', 'avif', 'tiff', 'bmp', 'gif', 'png'], 
     transformation: [
-      { format: "webp" },
-      { quality: "auto:good" },
-      { flags: "progressive" },
-      { crop: "limit", width: 1200, height: 900 }
+      { width: 800, height: 800, crop: "limit" }, // Limit image size
+      { quality: "auto" }, // Automatic quality optimization
+      { fetch_format: "auto" }, // Automatic format optimization
     ],
-    
-    public_id: (req, file) => {
-      const timestamp = Date.now();
-      const random = Math.floor(Math.random() * 1000);
-      return `kheyamind_blog_${timestamp}_${random}`;
-    },
-    
-    use_filename: false,
-    unique_filename: true,
-    overwrite: false
+    // Enable eager transformation to pre-generate optimized versions
+    eager: [
+      { width: 400, height: 400, crop: "limit" }, // Thumbnail
+      { width: 800, height: 800, crop: "limit" }  // Full size
+    ]
   }
 });
 
-// VERCEL-OPTIMIZED: Simplified multer configuration
+// Configure multer with optimized settings
 const upload = multer({
   storage: storage,
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      'image/jpeg',
-      'image/jpg', 
-      'image/png',
-      'image/gif',
-      'image/webp'
-    ];
-    
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error(`Unsupported file type: ${file.mimetype}`), false);
-    }
-  },
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit for Vercel serverless
-    files: 1
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+    files: 1 // Only allow 1 file per request
+  },
+  fileFilter: (req, file, cb) => {
+    // Check if file is an image
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed!'), false);
+    }
+    
+    // Log file details for debugging
+    console.log('Processing file:', {
+      fieldname: file.fieldname,
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size
+    });
+    
+    cb(null, true);
   }
 });
 
-// SIMPLIFIED: Basic responsive URL generation
-const generateWebPUrls = (publicId) => {
-  try {
-    const baseUrl = cloudinary.url(publicId, {
-      format: 'webp',
-      quality: 'auto:good'
-    });
-    
-    return {
-      original: baseUrl,
-      thumbnail: cloudinary.url(publicId, {
-        format: 'webp',
-        quality: 'auto:good',
-        width: 400,
-        height: 300,
-        crop: 'fill'
-      }),
-      medium: cloudinary.url(publicId, {
-        format: 'webp',
-        quality: 'auto:good',
-        width: 800,
-        height: 600,
-        crop: 'limit'
-      })
-    };
-  } catch (error) {
-    return { 
-      original: cloudinary.url(publicId, { format: 'webp' }),
-      thumbnail: null,
-      medium: null
-    };
-  }
-};
-
-// SIMPLIFIED: Basic WebP upload function
-const uploadToWebP = async (fileBuffer, filename, options = {}) => {
-  try {
-    const base64Data = `data:image/jpeg;base64,${fileBuffer.toString('base64')}`;
-    
-    const uploadOptions = {
-      folder: "blog-images",
-      public_id: options.public_id || `webp_${Date.now()}`,
-      format: 'webp',
-      quality: 'auto:good',
-      resource_type: 'image',
-      ...options
-    };
-    
-    const result = await cloudinary.uploader.upload(base64Data, uploadOptions);
-    return result;
-    
-  } catch (error) {
-    console.error('WebP upload failed:', error.message);
-    throw error;
-  }
-};
-
-// VERCEL FIX: Check environment variables only when needed
-const checkCloudinaryConfig = () => {
-  const required = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    throw new Error(`Missing Cloudinary credentials: ${missing.join(', ')}`);
-  }
-  
-  return true;
-};
-
-// Export utilities for KheyaMind AI blog
-module.exports = { 
-  upload,
-  uploadToWebP,
-  generateWebPUrls,
-  checkCloudinaryConfig,
-  cloudinary
-};
+// Export the multer middleware directly
+module.exports = upload;
