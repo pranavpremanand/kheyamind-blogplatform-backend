@@ -1,8 +1,9 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const cors = require("cors");
 const morgan = require("morgan");
 const dotenv = require("dotenv");
-const dbConnect = require("./lib/dbConnect.js");
+const path = require("path");
 
 // Import routes
 const authRoutes = require("./routes/auth.routes");
@@ -12,54 +13,77 @@ const categoryRoutes = require("./routes/category.routes");
 const authorRoutes = require("./routes/author.routes");
 
 // Load environment variables
-if (process.env.NODE_ENV !== "production") {
-  dotenv.config();
-}
+dotenv.config();
 
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: process.env.NODE_ENV === "production"
-    ? ["https://kheyamind-blogplatform-backend.vercel.app", "https://www.kheyamind.ai"]
-    : ["http://localhost:3000", "http://localhost:5000"],
-  credentials: true,
-}));
+app.use(cors());
 
+// Increased JSON payload size limit to 50MB
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(morgan("dev"));
 
-if (process.env.NODE_ENV !== "production") {
-  app.use(morgan("dev"));
-}
+// No longer serving uploaded files from filesystem as we're using base64 images
 
-// Connect to MongoDB once at startup using global cache
-(async () => {
-  try {
-    await dbConnect();
-    console.log("✅ MongoDB connected");
-  } catch (err) {
-    console.error("❌ MongoDB connection error:", err.message);
-    process.exit(1);
-  }
-})();
+// Connect to MongoDB with improved options
+mongoose
+  .connect(process.env.MONGODB_URI, {
+    // Increase timeout values
+    serverSelectionTimeoutMS: 30000, // 30 seconds
+    socketTimeoutMS: 45000, // 45 seconds
+    // Performance and reliability options
+    maxPoolSize: 50, // Increase connection pool size
+    minPoolSize: 5, // Minimum connections to maintain
+    connectTimeoutMS: 30000, // Connection timeout
+    // Enable unified topology
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => {
+    console.log("Connected to MongoDB");
+
+    // Set global configuration for all queries
+    mongoose.set('maxTimeMS', 30000); // 30 second timeout for all queries
+
+    // Add a global timeout handler for all MongoDB operations
+    const originalExec = mongoose.Query.prototype.exec;
+    mongoose.Query.prototype.exec = function(...args) {
+      // Set a default timeout if not already set
+      if (!this.options.maxTimeMS) {
+        this.options.maxTimeMS = 30000; // 30 seconds default timeout
+      }
+      
+      // Add better error handling for timeouts
+      return originalExec.apply(this, args).catch(err => {
+        if (err.message && err.message.includes('buffering timed out')) {
+          console.error(`MongoDB query timeout: ${this.getQuery()}`);
+          err.message = 'Query timed out. Try using pagination or narrowing your search criteria.';
+        }
+        throw err;
+      });
+    };
+
+    const PORT = process.env.PORT || 5000;
+
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Could not connect to MongoDB", err);
+    // Log more detailed error information
+    if (err.name === "MongoServerSelectionError") {
+      console.error(
+        "MongoDB Server Selection Error. Please check your connection string and network."
+      );
+    }
+  });
 
 // Test route
 app.get("/", (req, res) => {
-  res.json({
-    message: "KheyaMind Blog Platform API",
-    version: "1.0.0",
-    status: "active",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Health check route
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-  });
+  res.send("Hello World");
 });
 
 // Routes
@@ -69,39 +93,39 @@ app.use("/api/users", userRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/authors", authorRoutes);
 
+// Health check route
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
-
-  if (err.name === "MongooseError" || err.name === "MongoError") {
+  console.error(err.stack);
+  
+  // Special handling for MongoDB timeout errors
+  if (err.name === 'MongooseError' && err.message.includes('buffering timed out')) {
+    return res.status(504).json({
+      success: false,
+      message: "Database query timed out. Try using pagination or narrowing your search criteria.",
+      error: err.message,
+      solution: "Try adding pagination parameters (limit and page) or use more specific search terms."
+    });
+  }
+  
+  // Handle other MongoDB errors
+  if (err.name === 'MongoError' || err.name === 'MongoServerError') {
     return res.status(500).json({
       success: false,
       message: "Database error occurred",
       error: process.env.NODE_ENV === "development" ? err.message : "Database operation failed",
     });
   }
-
-  if (err.code === "FUNCTION_INVOCATION_TIMEOUT") {
-    return res.status(504).json({
-      success: false,
-      message: "Request timeout",
-      error: "Function timeout",
-    });
-  }
-
+  
+  // Default error handler
   res.status(500).json({
     success: false,
-    message: "Internal server error",
-    error: process.env.NODE_ENV === "development" ? err.message : "Something went wrong",
-  });
-});
-
-// Handle 404 routes
-app.use("*", (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route not found",
-    path: req.originalUrl,
+    message: "Something went wrong!",
+    error: process.env.NODE_ENV === "development" ? err.message : {},
   });
 });
 
