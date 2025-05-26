@@ -59,17 +59,9 @@ const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'blog-images',
-    allowed_formats: ['jpg', 'jpeg', 'webp', 'avif', 'tiff', 'bmp', 'gif', 'png'], 
-    transformation: [
-      { width: 800, height: 800, crop: "limit" }, // Limit image size
-      { quality: "auto" }, // Automatic quality optimization
-      { fetch_format: "auto" }, // Automatic format optimization
-    ],
-    // Enable eager transformation to pre-generate optimized versions
-    eager: [
-      { width: 400, height: 400, crop: "limit" }, // Thumbnail
-      { width: 800, height: 800, crop: "limit" }  // Full size
-    ]
+    allowed_formats: ['jpg', 'jpeg', 'webp', 'avif', 'tiff', 'bmp', 'gif', 'png'],
+    // Remove transformations to preserve original format and dimensions
+    resource_type: 'auto'
   }
 });
 
