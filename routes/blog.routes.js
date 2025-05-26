@@ -2,7 +2,12 @@ const express = require("express");
 const multer = require("multer"); // Explicitly import multer
 const Blog = require("../models/blog.model");
 const { authenticate, authorizeAdmin } = require("../utils/auth");
-const upload = require("../utils/upload");
+const { 
+  upload, 
+  generateWebPUrls, 
+  getOptimizedTransformation,
+  cloudinary 
+} = require("../utils/upload");
 const slugify = require("../utils/slugify");
 
 const router = express.Router();
@@ -32,7 +37,7 @@ router.get("/", async (req, res) => {
     let query = Blog.find(filter)
       .sort({ createdAt: -1 })
       .lean() // Use lean() to get plain JS objects instead of Mongoose documents (faster)
-      .select('title slug excerpt imageUrl imageAlt tags publishDate status isFeatured createdAt categoryId authorId author') // Select only necessary fields
+      .select('title slug excerpt imageUrl imageAlt tags publishDate status isFeatured createdAt categoryId authorId author imageMetadata') // Added imageMetadata
       .populate("categoryId", "name")
       .populate("authorId", "name")
       .populate("author", "name");
@@ -381,13 +386,13 @@ router.get("/slug/:slug", async (req, res) => {
 });
 
 // @route   POST /api/blogs
-// @desc    Create a new blog with image upload
+// @desc    Create a new blog with WebP image upload
 // @access  Private (Admin only)
 router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (req, res) => {
   try {
     // Log request body for debugging
-    console.log('Request body:', req.body);
-    console.log('Uploaded file:', req.file);
+    console.log('🎯 KheyaMind AI Blog Creation Request:', req.body);
+    console.log('📁 Uploaded file:', req.file);
 
     if (!req.file) {
       return res.status(400).json({
@@ -395,6 +400,13 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
         message: "Blog image is required",
       });
     }
+
+    // ENHANCED: Get WebP optimization details
+    const originalFormat = req.file.mimetype.split('/')[1];
+    const isAnimated = req.file.originalname.toLowerCase().endsWith('.gif');
+    
+    console.log(`🚀 KheyaMind AI Blog: Processing ${originalFormat.toUpperCase()} → WebP`);
+    console.log('📸 Cloudinary WebP URL:', req.file.path);
 
     const {
       title,
@@ -412,9 +424,14 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
       slug,
     } = req.body;
 
-    // Image URL is now provided by Cloudinary
-    const imageUrl = req.file.path;
-    console.log('Cloudinary image URL:', imageUrl);
+    // ENHANCED: Image URL is now WebP from Cloudinary
+    const imageUrl = req.file.path; // This is now WebP format
+    
+    // ADDED: Generate responsive WebP URLs for the blog
+    const responsiveUrls = generateWebPUrls(req.file.filename);
+    
+    // ADDED: Get optimized URL for blog post display
+    const blogPostUrl = cloudinary.url(req.file.filename, getOptimizedTransformation('blog'));
 
     // Validate required fields
     if (!title) {
@@ -515,7 +532,7 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
       }
     }
 
-    // Create blog with Cloudinary image URL
+    // ENHANCED: Create blog with WebP image URL and additional metadata
     const blog = new Blog({
       title,
       content,
@@ -526,7 +543,7 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
           ? metaKeywords
           : metaKeywords.split(",").map((kw) => kw.trim())
         : [],
-      imageUrl,
+      imageUrl, // This is now WebP format
       status: status || "published",
       authorId: authorId,
       categoryId: categoryId,
@@ -536,6 +553,16 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
       isFeatured: isFeatured === "true" || isFeatured === true,
       publishDate: publishDate ? new Date(publishDate) : new Date(),
       ...(customSlug && { slug: customSlug }),
+      
+      // ADDED: Store WebP optimization metadata
+      imageMetadata: {
+        format: 'webp',
+        originalFormat: originalFormat,
+        isAnimated: isAnimated,
+        cloudinaryPublicId: req.file.filename,
+        responsiveUrls: responsiveUrls,
+        blogPostUrl: blogPostUrl
+      }
     });
 
     await blog.save();
@@ -543,20 +570,49 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
     if (blog.categoryId) await blog.populate("categoryId", "name");
     if (blog.authorId) await blog.populate("authorId", "name");
 
+    // ENHANCED: Get final optimization stats
+    let optimizationStats = null;
+    try {
+      const imageDetails = await cloudinary.api.resource(req.file.filename);
+      optimizationStats = {
+        finalSize: Math.round(imageDetails.bytes / 1024),
+        format: imageDetails.format,
+        dimensions: {
+          width: imageDetails.width,
+          height: imageDetails.height
+        }
+      };
+      console.log(`✅ KheyaMind AI Blog created with WebP image: ${optimizationStats.finalSize}KB`);
+    } catch (error) {
+      console.warn('Could not fetch image optimization stats:', error.message);
+    }
+
+    // ENHANCED: Return response with WebP optimization info
     res.status(201).json({
       success: true,
       blog,
+      message: `Blog created successfully with ${originalFormat.toUpperCase()} → WebP optimization${isAnimated ? ' (animation preserved)' : ''}`,
+      
+      // ADDED: WebP optimization details for admin dashboard
+      optimization: optimizationStats && {
+        format: 'webp',
+        originalFormat: originalFormat,
+        isAnimated: isAnimated,
+        finalSize: optimizationStats.finalSize,
+        dimensions: optimizationStats.dimensions,
+        responsiveUrls: responsiveUrls
+      }
     });
+    
   } catch (error) {
     // Enhanced error logging
-    console.error('Blog creation error:', {
+    console.error('❌ KheyaMind AI Blog creation error:', {
       message: error.message,
       stack: error.stack,
       name: error.name,
       fullError: error
     });
 
-    // Send a more detailed error response
     res.status(500).json({
       success: false,
       message: error.message || "Failed to create blog",
@@ -569,7 +625,7 @@ router.post("/", authenticate, authorizeAdmin, upload.single('image'), async (re
 });
 
 // @route   PUT /api/blogs/:id
-// @desc    Update a blog with image upload
+// @desc    Update a blog with WebP image upload
 // @access  Private (Admin only)
 router.put("/:id", authenticate, authorizeAdmin, upload.single("image"), async (req, res) => {
   try {
@@ -597,6 +653,29 @@ router.put("/:id", authenticate, authorizeAdmin, upload.single("image"), async (
       slug,
       publishDate,
     } = req.body;
+
+    // ENHANCED: Handle WebP image updates
+    let imageUpdateInfo = null;
+    if (req.file) {
+      const originalFormat = req.file.mimetype.split('/')[1];
+      const isAnimated = req.file.originalname.toLowerCase().endsWith('.gif');
+      
+      console.log(`🔄 KheyaMind AI Blog Update: Processing ${originalFormat.toUpperCase()} → WebP`);
+      console.log('📁 New Cloudinary WebP URL:', req.file.path);
+      
+      // Generate responsive URLs for the new image
+      const responsiveUrls = generateWebPUrls(req.file.filename);
+      const blogPostUrl = cloudinary.url(req.file.filename, getOptimizedTransformation('blog'));
+      
+      imageUpdateInfo = {
+        format: 'webp',
+        originalFormat: originalFormat,
+        isAnimated: isAnimated,
+        cloudinaryPublicId: req.file.filename,
+        responsiveUrls: responsiveUrls,
+        blogPostUrl: blogPostUrl
+      };
+    }
 
     // Check if a custom slug was provided
     if (slug !== undefined) {
@@ -719,12 +798,16 @@ router.put("/:id", authenticate, authorizeAdmin, upload.single("image"), async (
       blog.isFeatured = isFeatured === "true" || isFeatured === true;
     }
 
-    // Update image if a new one was uploaded or URL provided
+    // ENHANCED: Update image with WebP optimization
     if (req.file) {
-      // Use the Cloudinary URL directly
+      // Use the new Cloudinary WebP URL
       blog.imageUrl = req.file.path;
+      
+      // ADDED: Update image metadata with WebP info
+      blog.imageMetadata = imageUpdateInfo;
+      
     } else if (req.body.imageUrl) {
-      // Use the provided image URL
+      // Use the provided image URL (fallback)
       blog.imageUrl = req.body.imageUrl;
     }
 
@@ -740,12 +823,46 @@ router.put("/:id", authenticate, authorizeAdmin, upload.single("image"), async (
     if (blog.categoryId) await blog.populate("categoryId", "name");
     if (blog.authorId) await blog.populate("authorId", "name");
 
+    // ENHANCED: Get optimization stats for updated image
+    let optimizationStats = null;
+    if (req.file) {
+      try {
+        const imageDetails = await cloudinary.api.resource(req.file.filename);
+        optimizationStats = {
+          finalSize: Math.round(imageDetails.bytes / 1024),
+          format: imageDetails.format,
+          dimensions: {
+            width: imageDetails.width,
+            height: imageDetails.height
+          }
+        };
+        console.log(`✅ KheyaMind AI Blog updated with WebP image: ${optimizationStats.finalSize}KB`);
+      } catch (error) {
+        console.warn('Could not fetch image optimization stats:', error.message);
+      }
+    }
+
+    // ENHANCED: Return response with WebP info
     res.json({
       success: true,
       blog,
+      message: imageUpdateInfo 
+        ? `Blog updated with ${imageUpdateInfo.originalFormat.toUpperCase()} → WebP optimization${imageUpdateInfo.isAnimated ? ' (animation preserved)' : ''}`
+        : "Blog updated successfully",
+      
+      // ADDED: WebP optimization details if image was updated
+      optimization: optimizationStats && {
+        format: 'webp',
+        originalFormat: imageUpdateInfo?.originalFormat,
+        isAnimated: imageUpdateInfo?.isAnimated,
+        finalSize: optimizationStats.finalSize,
+        dimensions: optimizationStats.dimensions,
+        responsiveUrls: imageUpdateInfo?.responsiveUrls
+      }
     });
+    
   } catch (error) {
-    console.error('Blog update error:', error);
+    console.error('❌ KheyaMind AI Blog update error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to update blog",
@@ -768,17 +885,146 @@ router.delete("/:id", authenticate, authorizeAdmin, async (req, res) => {
       });
     }
 
+    // ENHANCED: Also delete image from Cloudinary if it exists
+    if (blog.imageMetadata && blog.imageMetadata.cloudinaryPublicId) {
+      try {
+        await cloudinary.uploader.destroy(blog.imageMetadata.cloudinaryPublicId);
+        console.log(`🗑️ Deleted Cloudinary image: ${blog.imageMetadata.cloudinaryPublicId}`);
+      } catch (error) {
+        console.warn('Could not delete Cloudinary image:', error.message);
+      }
+    }
+
     await blog.deleteOne();
 
     res.json({
       success: true,
-      message: "Blog removed",
+      message: "Blog and associated images removed successfully",
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({
       success: false,
       message: "Failed to delete blog",
+      error: error.message,
+    });
+  }
+});
+
+// ADDED: New route to get WebP optimization stats
+// @route   GET /api/blogs/stats/optimization
+// @desc    Get WebP optimization statistics for KheyaMind AI blog
+// @access  Private (Admin only)
+router.get("/stats/optimization", authenticate, authorizeAdmin, async (req, res) => {
+  try {
+    // Get all blogs with image metadata
+    const blogs = await Blog.find({
+      imageMetadata: { $exists: true }
+    }).select('imageMetadata createdAt').lean();
+
+    // Calculate optimization statistics
+    const stats = blogs.reduce((acc, blog) => {
+      acc.totalBlogs++;
+      
+      if (blog.imageMetadata && blog.imageMetadata.format === 'webp') {
+        acc.webpBlogs++;
+        
+        if (blog.imageMetadata.isAnimated) {
+          acc.animatedWebp++;
+        }
+        
+        // Track original formats
+        const originalFormat = blog.imageMetadata.originalFormat;
+        acc.originalFormats[originalFormat] = (acc.originalFormats[originalFormat] || 0) + 1;
+      }
+      
+      return acc;
+    }, {
+      totalBlogs: 0,
+      webpBlogs: 0,
+      animatedWebp: 0,
+      originalFormats: {}
+    });
+
+    // Calculate adoption rate
+    const webpAdoption = stats.totalBlogs > 0 
+      ? Math.round((stats.webpBlogs / stats.totalBlogs) * 100) 
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalBlogs: stats.totalBlogs,
+          webpBlogs: stats.webpBlogs,
+          animatedWebp: stats.animatedWebp,
+          webpAdoption: webpAdoption,
+          originalFormats: stats.originalFormats
+        },
+        message: `KheyaMind AI Blog: ${webpAdoption}% WebP adoption rate`,
+        recommendations: webpAdoption < 100 ? [
+          "Consider updating older blog images to WebP format for better performance",
+          "WebP images load 3x faster and improve SEO rankings",
+          "All new uploads are automatically optimized to WebP"
+        ] : [
+          "Excellent! All blog images are WebP optimized",
+          "Your blog is delivering maximum performance to users worldwide"
+        ]
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching optimization stats:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch optimization statistics",
+      error: error.message,
+    });
+  }
+});
+
+// ADDED: New route to get responsive URLs for existing images
+// @route   GET /api/blogs/:id/responsive-urls
+// @desc    Get responsive WebP URLs for a specific blog image
+// @access  Public
+router.get("/:id/responsive-urls", async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id).select('imageMetadata imageUrl').lean();
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: "Blog not found",
+      });
+    }
+
+    // Generate responsive URLs if we have the Cloudinary public ID
+    let responsiveUrls = null;
+    if (blog.imageMetadata && blog.imageMetadata.cloudinaryPublicId) {
+      responsiveUrls = generateWebPUrls(blog.imageMetadata.cloudinaryPublicId);
+    } else if (blog.imageUrl) {
+      // For backward compatibility, try to extract public ID from URL
+      const urlParts = blog.imageUrl.split('/');
+      const publicIdWithExt = urlParts[urlParts.length - 1];
+      const publicId = publicIdWithExt.split('.')[0];
+      responsiveUrls = generateWebPUrls(publicId);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        originalUrl: blog.imageUrl,
+        responsiveUrls: responsiveUrls,
+        isWebP: blog.imageMetadata ? blog.imageMetadata.format === 'webp' : false,
+        metadata: blog.imageMetadata || null
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error generating responsive URLs:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate responsive URLs",
       error: error.message,
     });
   }
